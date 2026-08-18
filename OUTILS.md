@@ -4,6 +4,10 @@
 
 Un **effet de bord** signifie qu'un outil modifie ou expose quelque chose hors de son calcul local : appel réseau, coût facturé, transmission de données ou écriture persistante. Les outils déterministes sont appelés par l'orchestrateur puis leurs résultats sont fournis aux agents ; le LLM ne décide pas s'il faut les exécuter.
 
+## Validation des sorties
+
+Toute sortie produite par un appel LLM (expert ou arbitre) est validée par un schéma typé avant d'être consommée : `AgentOutput` pour les trois experts, `ArbiterVerdict` pour l'Arbitre. Une réponse qui ne respecte pas le contrat — champ manquant, type incorrect, hors bornes ou illisible — est rejetée et traitée comme `StructuredOutputError` : elle n'est ni transmise à l'Arbitre ni exposée au front. Seules les sorties validées alimentent la file d'événements. Cette validation est distincte de la validation d'entrée : l'entrée protège le serveur (texte vide, taille, types), la sortie protège le contrat de consommation du front.
+
 ## Types utilisés dans les signatures
 
 ```text
@@ -103,7 +107,7 @@ run_expert(
 ) -> AgentOutput
 ```
 
-- **Utilisé par :** les trois experts via la passerelle Mistral unique et le modèle `mistral-small-2603`.
+- **Utilisé par :** les trois experts via la passerelle MiniMax unique et le modèle `MiniMax-M3`.
 - **But :** interroger le fournisseur avec le rôle et le schéma `AgentOutput` attendus.
 - **Effet de bord : OUI.** Appel réseau, transmission du document à un tiers et coût API potentiel.
 - **Échec défini :** `ProviderError`, `TimeoutError` ou `StructuredOutputError` ; aucune réponse invalide n'est transmise à l'Arbitre.

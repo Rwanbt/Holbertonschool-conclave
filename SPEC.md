@@ -4,7 +4,7 @@
 **Équipe :** Erwan + Yo  
 **Pitch :** un même document, trois lectures contradictoires, un verdict exploitable.
 
-**Stack figée :** React + TypeScript + Vite ; FastAPI + Python + Pydantic + `asyncio` ; API Mistral avec le modèle `mistral-small-2603` ; état éphémère en mémoire.
+**Stack figée :** React + TypeScript + Vite ; FastAPI + Python + Pydantic + `asyncio` ; API MiniMax avec le modèle `MiniMax-M3` ; état éphémère en mémoire.
 
 ## Le problème — exactement 5 lignes
 
