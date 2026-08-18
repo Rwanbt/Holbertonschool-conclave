@@ -1,0 +1,31 @@
+flowchart TD
+    U["Utilisateur"] --> F["Front web<br/>React + TypeScript"]
+    F -->|"POST /api/analyses<br/>texte brut"| API["API FastAPI<br/>validation d'entrée"]
+    API -->|"202 : analysis_id + stream_url"| F
+    F -->|"GET stream_url<br/>EventSource / SSE"| SSE["Contrôleur SSE"]
+
+    subgraph B["Backend Python"]
+        API --> O["Orchestrateur asyncio"]
+        O --> A["Avocat"]
+        O --> P["Procureur"]
+        O --> C["Comptable"]
+        A --> G["Passerelle LLM"]
+        P --> G
+        C --> G
+        T["Outils déterministes<br/>métriques · indices · coût"] --> O
+        A --> V["Validation AgentOutput"]
+        P --> V
+        C --> V
+        V --> R["Arbitre"]
+        R --> G
+        R --> W["Validation ArbiterVerdict"]
+        O --> Q["File d'événements"]
+        V --> Q
+        W --> Q
+        Q --> SSE
+        M[("État temporaire en RAM<br/>TTL 15 min")] --- O
+        M --- SSE
+    end
+
+    G --> X["API Minimax<br/>minimax m3"]
+    SSE -->|"SSE typé"| F
