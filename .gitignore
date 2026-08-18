@@ -1,0 +1,14 @@
+# Secrets locaux — jamais commités
+.env
+**/.env
+API_Key
+
+# Environnement Python
+.venv/
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Front (travail d'Erwan — Palier 3)
+frontend/node_modules/
+frontend/dist/
