@@ -1,0 +1,84 @@
+.conclave {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+.conclave h1 {
+  margin: 0 0 0.25rem;
+  font-size: clamp(2rem, 6vw, 3rem);
+  letter-spacing: 0.08em;
+}
+
+.tagline {
+  margin: 0 0 1.5rem;
+  color: #5b6472;
+}
+
+.conclave-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.conclave-form label {
+  font-weight: 600;
+}
+
+.conclave-form textarea {
+  min-height: 120px;
+  padding: 0.75rem;
+  border: 1px solid #c6ccd8;
+  border-radius: 8px;
+  font: inherit;
+  resize: vertical;
+}
+
+.conclave-form button {
+  align-self: flex-start;
+  padding: 0.6rem 1.2rem;
+  border: none;
+  border-radius: 8px;
+  background-color: #1f2430;
+  color: #ffffff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.conclave-form button:hover:not(:disabled) {
+  background-color: #323a4d;
+}
+
+.conclave-form button:disabled {
+  background-color: #b4bac6;
+  cursor: not-allowed;
+}
+
+.conclave-status {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px solid #e2e5ec;
+  border-radius: 8px;
+  background-color: #ffffff;
+}
+
+.model-label {
+  font-weight: 700;
+}
+
+.answer {
+  margin-bottom: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.status-error {
+  color: #a12424;
+}
+
+@media (max-width: 480px) {
+  .conclave-form button {
+    align-self: stretch;
+    text-align: center;
+  }
+}
