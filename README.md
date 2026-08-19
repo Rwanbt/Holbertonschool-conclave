@@ -1,11 +1,12 @@
-# CONCLAVE — Palier 2 « Socle »
+# CONCLAVE — Palier 3 « Le premier outil »
 
-Front minimal : on envoie un message, on reçoit la réponse réelle du modèle
-MiniMax-M3 via le backend FastAPI.
+Le front envoie un **document** et une **instruction naturelle** au backend
+(`POST /api/p3/agent`) ; le modèle MiniMax-M3 choisit lui-même l'outil à
+appeler puis répond. Le front affiche la réponse, la **trace des outils** et
+les **métriques d'exécution**.
 
 - **Front** : React + TypeScript + Vite dans `frontend/` (branche `erwan`).
 - **Back** : FastAPI + Python dans `backend/` (branche `yo`, travail de Yohan).
-  Endpoint consommé : `POST /api/p2/llm`.
 
 ## Prérequis
 
@@ -13,49 +14,55 @@ MiniMax-M3 via le backend FastAPI.
 - Python ≥ 3.10.
 - Deux terminaux : un pour le backend, un pour le frontend.
 
-## Clone et branches
+## Démarrage en moins de cinq minutes
+
+La suite part de la branche `dev`, qui contient déjà front et backend.
 
 ```bash
 git clone https://github.com/Rwanbt/Holbertonschool-conclave.git
 cd Holbertonschool-conclave
-git switch erwan
+git switch dev
 ```
 
-Le backend vit sur la branche `yo` (fournie par Yohan) :
+### 1. Configuration locale
+
+Copiez le fichier d'exemple à la racine vers `.env` (le fichier `.env` est
+ignoré par git ; c'est lui qui porte la clé MiniMax, jamais commitée) :
 
 ```bash
-git fetch origin
-git switch yo
+cp .env.example .env
 ```
 
-La suite suppose que le dépôt contient `frontend/` et `backend/`.
+Ensuite, ouvrez `.env` et remplacez
+`MINIMAX_API_KEY=replace_with_your_minimax_api_key` par votre clé MiniMax.
 
-## Copie des fichiers d'environnement
-
-Deux fichiers `.env.example` sont fournis (un par application). Aucun n'est secret.
+Options du front, dans `frontend/.env` (facultatif — la valeur par défaut
+suffit au parcours local) :
 
 ```bash
 cp frontend/.env.example frontend/.env
-cp backend/.env.example backend/.env    # valeurs attendues : voir backend/README.md de Yohan
 ```
 
-Le front n'attend qu'une variable : `VITE_API_BASE_URL` (défaut
-`http://localhost:8000`). Aucune clé MiniMax ne doit figurer dans le front ;
-la clé vit uniquement côté backend.
+`VITE_API_BASE_URL` vaut `http://localhost:8000` par défaut. Cette variable
+n'est pas secrète.
 
-## Terminal 1 — Backend (branche `yo`)
+### 2. Terminal 1 — Backend
 
 ```bash
-git switch yo
 python -m venv .venv
 source .venv/bin/activate          # Windows : .venv\Scripts\activate
-pip install -r backend/requirements.txt   # commande exacte : voir backend/README.md
-uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
+pip install -r backend/requirements.txt
+uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Le backend doit écouter sur `http://localhost:8000`.
+Le backend écoute sur `http://localhost:8000`. Vérification de santé :
 
-## Terminal 2 — Frontend (branche `erwan`)
+```bash
+curl -s http://localhost:8000/api/health
+# -> {"status":"ok"}
+```
+
+### 3. Terminal 2 — Frontend
 
 ```bash
 cd frontend
@@ -63,29 +70,51 @@ npm install
 npm run dev
 ```
 
-## URL à ouvrir
+Puis ouvrez **http://localhost:5173**.
 
-- Application : http://localhost:5173
-- Documentation du backend (si fournie) : http://localhost:8000/docs
+## Tester l'agent
 
-## Test de santé
+Deux champs s'affichent :
 
-Dans l'application : saisir un message non vide puis cliquer sur
-« Tester le Conclave ». La réponse et le nom du modèle (`MiniMax-M3`)
-doivent s'afficher.
+- **Document** : le texte à analyser, limité à 12 000 caractères (compteur
+  affiché) ;
+- **Instruction** : votre demande en langage naturel, sans choisir d'outil.
 
-En ligne de commande :
+Puis cliquez sur « Tester l'agent ». Le backend valide l'entrée, choisit et
+exécute l'outil (ou signale son échec dans la trace), interroge MiniMax-M3 et
+renvoie la réponse, la trace et les usages. Une instruction naturelle suffit :
+le front ne sélectionne jamais l'outil à la place du modèle.
+
+Trois exemples sont proposés dans l'interface (métriques, indices de sécurité,
+estimation de coût) et se remplissent d'un clic.
+
+Test direct de la route de ce palier :
 
 ```bash
-curl -s -X POST http://localhost:8000/api/p2/llm \
+curl -s -X POST http://localhost:8000/api/p3/agent \
   -H 'Content-Type: application/json' \
-  -d '{"message":"Bonjour Conclave"}'
+  -d '{"instruction":"Calcule les métriques du document","document":"Bonjour Conclave"}'
 ```
 
-Réponse attendue : `{"answer": "...", "model": "MiniMax-M3"}`.
+Réponse attendue : `{"answer": "...", "model": "MiniMax-M3", "trace": [...], "usage": {...}}`.
 
-Codes HTTP du contrat : `422` saisie invalide · `500` configuration serveur
-absente · `502` fournisseur MiniMax indisponible.
+Codes HTTP du contrat : `422` entrée invalide · `500` configuration serveur
+absente · `502` fournisseur MiniMax indisponible. Une erreur d'outil arrive
+normalement dans une réponse `200` avec une entrée de trace `status: "error"`
+et une réponse finale honnête.
+
+## Panne contrôlée — `DISABLED_TOOLS`
+
+Pour tester sans clé ni tarif réel le rendu d'une trace d'échec, le backend
+peut accepter une variable `DISABLED_TOOLS` (vue de Yohan) qui liste les outils
+simulés en erreur, séparés par des virgules. Exemple dans `.env` :
+
+```text
+DISABLED_TOOLS=measure_document
+```
+
+Aucun secret dans le front : cette variable n'est lue que par le backend, et
+rien n'est affiché du document intégral dans l'interface de debug.
 
 ## Commandes de vérification
 
@@ -95,11 +124,19 @@ npm run lint
 npm run build
 ```
 
+Depuis la racine, vérifier que rien d'étranger n'est indexé :
+
+```bash
+git status --short
+git diff --check
+```
+
 ## Dépannage minimal
 
 | Symptôme | Cause probable | Correctif |
 | --- | --- | --- |
 | « Impossible de joindre le backend » | back non lancé, mauvais port, ou `VITE_API_BASE_URL` erronée | lancer le back puis recharger la page ; revérifier `frontend/.env` |
-| Réponse code 502 | fournisseur MiniMax indisponible | réessayer plus tard |
-| Réponse code 500 | clé ou configuration backend absente | vérifier `backend/.env` |
-| Bouton grisé en permanence | message vide ou appel en cours | saisir du texte puis réessayer |
+| Code 422 | instruction vide ou document hors bornes | remplir les deux champs ; document ≤ 12 000 caractères |
+| Code 500 | clé ou configuration backend absente | vérifier `MINIMAX_API_KEY` dans `.env` racine |
+| Code 502 | fournisseur MiniMax indisponible | attendre puis réessayer |
+| Trace d'outil en échec | outil réellement en échec, ou `DISABLED_TOOLS` actif | relire `error_code` de l'entrée de trace |
