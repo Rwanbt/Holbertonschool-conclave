@@ -1,9 +1,11 @@
-# CONCLAVE — Palier 3 « Le premier outil »
+# CONCLAVE — Palier 4 « Le Contrat Conclave »
 
-Le front envoie un **document** et une **instruction naturelle** au backend
-(`POST /api/p3/agent`) ; le modèle MiniMax-M3 choisit lui-même l'outil à
-appeler puis répond. Le front affiche la réponse, la **trace des outils** et
-les **métriques d'exécution**.
+Le front soumet un **document** au backend (`POST /api/analyses`) ; trois experts
+(**Avocat**, **Procureur**, **Comptable**) l'analysent en parallèle, puis un
+**Arbitre** rend un verdict. L'interface parcourt six étapes — **Soumettre,
+Convoquer, Observer, Comparer, Arbitrer, Décider** — et survit à un
+rechargement de page : le snapshot et le flux SSE repris via `?after=` sont
+rejoués depuis SQLite.
 
 - **Front** : React + TypeScript + Vite dans `frontend/` (branche `erwan`).
 - **Back** : FastAPI + Python dans `backend/` (branche `yo`, travail de Yohan).
@@ -15,8 +17,6 @@ les **métriques d'exécution**.
 - Deux terminaux : un pour le backend, un pour le frontend.
 
 ## Démarrage en moins de cinq minutes
-
-La suite part de la branche `dev`, qui contient déjà front et backend.
 
 ```bash
 git clone https://github.com/Rwanbt/Holbertonschool-conclave.git
@@ -72,61 +72,54 @@ npm run dev
 
 Puis ouvrez **http://localhost:5173**.
 
-## Tester l'agent
+## Utiliser le Contrat Conclave
 
-Deux champs s'affichent :
+- **Soumettre** : collez un document (1 à 12 000 caractères, compteur affiché)
+  puis cliquez « Convoquer le Conclave ».
+- **Observer / Comparer** : chaque expert travaille dans une colonne dédiée ;
+  chaque sortie validée apparaît dès qu'elle est prête, avec constats, note et
+  recommandations.
+- **Arbitrer / Décider** : l'arbitre rend un verdict (`go`, `go_with_conditions`
+  ou `no_go`), un score, les désaccords, les risques, les actions et le
+  compromis accepté.
 
-- **Document** : le texte à analyser, limité à 12 000 caractères (compteur
-  affiché) ;
-- **Instruction** : votre demande en langage naturel, sans choisir d'outil.
+**Persistance** : l'UUID de l'analyse est stocké dans `localStorage`
+(clé `conclave.currentAnalysisId.v1`) et dans l'URL (`?uuid=`). Un
+rafraîchissement relit le snapshot (`GET /api/analyses/{id}`) puis reprend le
+flux SSE à `?after=<dernier événement reçu>`. Une analyse introuvable (404)
+nettoie la référence locale sans rien re-poster.
 
-Puis cliquez sur « Tester l'agent ». Le backend valide l'entrée, choisit et
-exécute l'outil (ou signale son échec dans la trace), interroge MiniMax-M3 et
-renvoie la réponse, la trace et les usages. Une instruction naturelle suffit :
-le front ne sélectionne jamais l'outil à la place du modèle.
+**Panneau outils** : chaque bouton envoie une commande
+`/tools enable|disable <nom>` via `POST /api/tool-commands` ; l'état vit dans
+SQLite (`tool_states`), jamais de redémarrage nécessaire. La commande
+`/tools list` renvoie un 422 côté serveur (`GET /api/tools` fait foi).
 
-Trois exemples sont proposés dans l'interface (métriques, indices de sécurité,
-estimation de coût) et se remplissent d'un clic.
+**Panneau « Démonstration »** : connexion SSE, dernière événement reçu, tours
+d'outils par rôle et usage agrégé, entièrement reconstruits depuis les
+événements observés (aucun timer fictif).
 
-Test direct de la route de ce palier :
+## Comportements hors du contrat
 
-```bash
-curl -s -X POST http://localhost:8000/api/p3/agent \
-  -H 'Content-Type: application/json' \
-  -d '{"instruction":"Calcule les métriques du document","document":"Bonjour Conclave"}'
-```
-
-Réponse attendue : `{"answer": "...", "model": "MiniMax-M3", "trace": [...], "usage": {...}}`.
-
-Codes HTTP du contrat : `422` entrée invalide · `500` configuration serveur
-absente · `502` fournisseur MiniMax indisponible. Une erreur d'outil arrive
-normalement dans une réponse `200` avec une entrée de trace `status: "error"`
-et une réponse finale honnête.
-
-## Panne contrôlée — `DISABLED_TOOLS`
-
-Pour tester sans clé ni tarif réel le rendu d'une trace d'échec, le backend
-peut accepter une variable `DISABLED_TOOLS` (vue de Yohan) qui liste les outils
-simulés en erreur, séparés par des virgules. Exemple dans `.env` :
-
-```text
-DISABLED_TOOLS=measure_document
-```
-
-Aucun secret dans le front : cette variable n'est lue que par le backend, et
-rien n'est affiché du document intégral dans l'interface de debug.
+Les garde-fous du Palier 4 s'appliquent : aucune valeur inventée, un seul
+outil par tour, sorties validées avant affichage, événements SSE bornés. Une
+chute du flux SSE déclenche une reconnexion automatique ; un événement
+malformé est ignoré et signalé sans vider le snapshot. Un document conforme à
+`Happy_path.md` doit parcourir les six étapes et finir sur `go_with_conditions`.
 
 ## Commandes de vérification
 
 ```bash
 cd frontend
+npm ci
 npm run lint
 npm run build
+npm test          # vitest — validators, étapes, stockage, commandes /tools
 ```
 
 Depuis la racine, vérifier que rien d'étranger n'est indexé :
 
 ```bash
+python -m pytest backend/tests -q   # suite backend de Yohan, inchangée
 git status --short
 git diff --check
 ```
@@ -136,7 +129,8 @@ git diff --check
 | Symptôme | Cause probable | Correctif |
 | --- | --- | --- |
 | « Impossible de joindre le backend » | back non lancé, mauvais port, ou `VITE_API_BASE_URL` erronée | lancer le back puis recharger la page ; revérifier `frontend/.env` |
-| Code 422 | instruction vide ou document hors bornes | remplir les deux champs ; document ≤ 12 000 caractères |
+| Code 422 à la soumission | document vide ou hors bornes | remplir le champ ; document ≤ 12 000 caractères |
 | Code 500 | clé ou configuration backend absente | vérifier `MINIMAX_API_KEY` dans `.env` racine |
 | Code 502 | fournisseur MiniMax indisponible | attendre puis réessayer |
-| Trace d'outil en échec | outil réellement en échec, ou `DISABLED_TOOLS` actif | relire `error_code` de l'entrée de trace |
+| « Analyse introuvable (404) » | analyse supprimée ou base remise à zéro | la référence locale est nettoyée ; relancer une analyse |
+| Outil inactif dans le panneau | outil désactivé via `/tools` ou `DISABLED_TOOLS` | réactiver via le bouton ; l'état SQLite fait foi |
