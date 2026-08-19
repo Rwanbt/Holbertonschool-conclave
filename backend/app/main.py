@@ -24,9 +24,14 @@ app = FastAPI(
 
 _boot_settings = get_settings()
 
+
+def _parse_origins(value: str) -> list[str]:
+    return [origin.strip() for origin in value.split(",") if origin.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[_boot_settings.frontend_origin],
+    allow_origins=_parse_origins(_boot_settings.frontend_origin),
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
