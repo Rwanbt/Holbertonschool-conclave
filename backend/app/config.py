@@ -45,7 +45,33 @@ class Settings(BaseSettings):
     )
     disabled_tools: str = Field(
         "",
-        description="Outils désactivés, séparés par des virgules (jamais modifiables via l'API).",
+        description=(
+            "Outils désactivés à l'initialisation d'une base SQLite neuve "
+            "(séparés par des virgules). Ensuite la table tool_states fait foi."
+        ),
+    )
+
+    database_path: str = Field(
+        "./data/conclave.db",
+        description="Chemin de la base SQLite durable (crée son dossier).",
+    )
+
+    agent_max_rounds: int = Field(
+        5, ge=1, description="Nombre maximal de tours d'outils par expert (boucle P4)."
+    )
+    expert_max_output_tokens: int = Field(
+        1500,
+        ge=50,
+        description="Budget de sortie des experts/arbitre (JSON structuré volumineux).",
+    )
+    expert_timeout_seconds: float = Field(
+        30.0, gt=0, description="Délai maximal d'un expert (Avocat/Procureur/Comptable)."
+    )
+    arbiter_timeout_seconds: float = Field(
+        20.0, gt=0, description="Délai maximal de l'Arbitre."
+    )
+    analysis_timeout_seconds: float = Field(
+        60.0, gt=0, description="Délai maximal de l'analyse entière."
     )
 
     @field_validator("disabled_tools")
