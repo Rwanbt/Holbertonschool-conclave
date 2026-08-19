@@ -12,3 +12,8 @@ API_Key
 # Front (travail d'Erwan — Palier 3)
 frontend/node_modules/
 frontend/dist/
+
+# Bases SQLite du Palier 4 — jamais commitées
+data/*.db
+*.db-shm
+*.db-wal
