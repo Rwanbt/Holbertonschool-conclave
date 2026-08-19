@@ -16,9 +16,9 @@ export interface ToolTraceEntry {
 }
 
 export interface ExecutionUsage {
-  input_tokens: number
-  output_tokens: number
-  total_tokens: number
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
   estimated_cost_usd: number | null
   total_latency_ms: number
   llm_rounds: number
@@ -31,13 +31,141 @@ export interface AgentResponse {
   usage: ExecutionUsage
 }
 
+// ---------------------------------------------------------------------------
+// Palier 4 — analyse persistante, experts, arbitre, événements, outils
+// ---------------------------------------------------------------------------
+
+export type AnalysisStatus =
+  | 'running'
+  | 'completed'
+  | 'degraded'
+  | 'failed'
+  | 'interrupted'
+
+export type ExpertStatus = 'pending' | 'running' | 'completed' | 'error' | 'timeout'
+
+export type ExpertRole = 'avocat' | 'procureur' | 'comptable'
+
+export type AgentRole = ExpertRole | 'arbitre'
+
+export type Priority = 'low' | 'medium' | 'high'
+
+export type VerdictDecision = 'go' | 'go_with_conditions' | 'no_go'
+
+export interface Finding {
+  title: string
+  evidence: string
+  impact: string
+  priority: Priority
+}
+
+export interface AgentOutput {
+  role: ExpertRole
+  summary: string
+  findings: Finding[]
+  score_label: string
+  score: number
+  recommendations: string[]
+  unavailable_tools: string[]
+}
+
+export interface ArbiterVerdict {
+  decision: VerdictDecision
+  score: number
+  main_disagreement: string
+  priority_risks: string[]
+  actions: string[]
+  accepted_tradeoff: string
+  unavailable_agents: ExpertRole[]
+}
+
+export interface ExpertRun {
+  role: ExpertRole
+  status: ExpertStatus
+  output: AgentOutput | null
+  error_code: string | null
+}
+
+export interface GuardrailStatuses {
+  analysis: AnalysisStatus[]
+  expert: ExpertStatus[]
+}
+
+export interface GuardrailInfo {
+  expert_timeout_seconds: number
+  arbiter_timeout_seconds: number
+  analysis_timeout_seconds: number
+  agent_max_rounds: number
+  document_max_length: number
+  statuses: GuardrailStatuses
+}
+
+export interface AnalysisCreated {
+  analysis_id: string
+  status: AnalysisStatus
+  created_at: string
+}
+
+export interface AnalysisSnapshot {
+  analysis_id: string
+  document: string
+  status: AnalysisStatus
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  error_code: string | null
+  avocat: ExpertRun
+  procureur: ExpertRun
+  comptable: ExpertRun
+  verdict: ArbiterVerdict | null
+  usage: ExecutionUsage
+  guardrails: GuardrailInfo
+}
+
+export type AnalysisEventType =
+  | 'analysis.created'
+  | 'expert.started'
+  | 'tool.started'
+  | 'tool.completed'
+  | 'tool.failed'
+  | 'expert.completed'
+  | 'expert.failed'
+  | 'expert.timeout'
+  | 'arbiter.started'
+  | 'arbiter.completed'
+  | 'arbiter.failed'
+  | 'analysis.completed'
+  | 'analysis.degraded'
+  | 'analysis.failed'
+  | 'analysis.interrupted'
+
+export interface AnalysisEvent {
+  id: number
+  type: AnalysisEventType
+  payload: Record<string, unknown>
+}
+
+export type ToolName =
+  | 'measure_current_document'
+  | 'find_security_indicators_in_current_document'
+  | 'estimate_current_analysis_cost'
+
+export interface ToolState {
+  tool_name: ToolName
+  enabled: boolean
+  description: string
+}
+
+export interface ToolCatalogResponse {
+  tools: ToolState[]
+}
+
+export interface ToolCommandResponse {
+  tool_name: ToolName
+  enabled: boolean
+}
+
 export type ApiError =
   | { kind: 'network'; message: string }
   | { kind: 'http'; status: number; message: string }
   | { kind: 'malformed'; message: string }
-
-export type UiState =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'success'; response: AgentResponse }
-  | { status: 'error'; message: string }
