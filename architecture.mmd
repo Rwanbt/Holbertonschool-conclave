@@ -1,31 +1,34 @@
 flowchart TD
     U["Utilisateur"] --> F["Front web<br/>React + TypeScript"]
-    F -->|"POST /api/analyses<br/>texte brut"| API["API FastAPI<br/>validation d'entrée"]
-    API -->|"202 : analysis_id + stream_url"| F
-    F -->|"GET stream_url<br/>EventSource / SSE"| SSE["Contrôleur SSE"]
+    F -->|"POST /api/analyses<br/>texte brut"| API["API FastAPI<br/>validation 1..12000"]
+    API -->|"201 : analysis_id"| F
+    F -->|"GET /api/analyses/{id}/events<br/>SSE rejouable"| SSE["Contrôleur SSE"]
+    F -->|"GET /api/tools<br/>POST /api/tool-commands"| API
 
     subgraph B["Backend Python"]
-        API --> O["Orchestrateur asyncio"]
+        API --> O["Orchestrateur asyncio<br/>run_analysis"]
         O --> A["Avocat"]
         O --> P["Procureur"]
         O --> C["Comptable"]
-        A --> G["Passerelle LLM"]
-        P --> G
-        C --> G
-        T["Outils déterministes<br/>métriques · indices · coût"] --> O
-        A --> V["Validation AgentOutput"]
-        P --> V
-        C --> V
-        V --> R["Arbitre"]
-        R --> G
-        R --> W["Validation ArbiterVerdict"]
-        O --> Q["File d'événements"]
-        V --> Q
-        W --> Q
-        Q --> SSE
-        M[("État temporaire en RAM<br/>TTL 15 min")] --- O
-        M --- SSE
+        A -->|"boucle d'outils"| LOOP["Boucle générique<br/>run_agent_loop"]
+        P --> LOOP
+        C --> LOOP
+        LOOP --> EX["Exécuteur d'outils<br/>état SQLite vérifié"]
+        EX --> T["Outils déterministes<br/>métriques · indices · coût"]
+        LOOP --> G["Passerelle LLM"]
+        VAL["Validation<br/>AgentOutput / ArbiterVerdict<br/>+ 1 réparation"] --> R["Arbitre"]
+        A --> VAL
+        P --> VAL
+        C --> VAL
+        VAL --> R
+        R --> LOOP
+        LOOP -->|"résultats réels"| G
+        R -->|"verdict validé"| SNAP["Snapshot SQLite"]
+        LOOP -->|"événements + traces"| DB[("SQLite<br/>analyses · expert_runs<br/>tool_events · analysis_events<br/>tool_states")]
+        SNAP --> DB
+        DB -->|"backlog par id"| SSE
+        DB -->|"état des outils"| API
     end
 
-    G --> X["API Minimax<br/>minimax m3"]
-    SSE -->|"SSE typé"| F
+    G --> X["API Minimax<br/>MiniMax-M3"]
+    SSE -->|"SSE typé + terminal"| F
