@@ -1,5 +1,5 @@
 .conclave {
-  max-width: 720px;
+  max-width: 760px;
   margin: 0 auto;
   padding: 2rem 1rem;
 }
@@ -18,15 +18,26 @@
 .conclave-form {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 1rem;
 }
 
-.conclave-form label {
+.conclave-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid #c6ccd8;
+  border-radius: 8px;
+}
+
+.conclave-field legend {
+  padding: 0 0.25rem;
   font-weight: 600;
 }
 
-.conclave-form textarea {
-  min-height: 120px;
+.conclave-field textarea {
+  width: 100%;
   padding: 0.75rem;
   border: 1px solid #c6ccd8;
   border-radius: 8px;
@@ -34,7 +45,14 @@
   resize: vertical;
 }
 
-.conclave-form button {
+.field-counter {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #5b6472;
+  text-align: right;
+}
+
+.conclave-form > button {
   align-self: flex-start;
   padding: 0.6rem 1.2rem;
   border: none;
@@ -45,13 +63,68 @@
   cursor: pointer;
 }
 
-.conclave-form button:hover:not(:disabled) {
+.conclave-form > button:hover:not(:disabled) {
   background-color: #323a4d;
 }
 
-.conclave-form button:disabled {
+.conclave-form > button:disabled,
+.examples button:disabled {
   background-color: #b4bac6;
   cursor: not-allowed;
+}
+
+.examples {
+  margin-top: 1.5rem;
+}
+
+.examples h2 {
+  margin: 0 0 0.25rem;
+  font-size: 1.1rem;
+}
+
+.examples-note {
+  margin: 0 0 0.75rem;
+  color: #5b6472;
+}
+
+.examples-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.example-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem;
+  border: 1px solid #e2e5ec;
+  border-radius: 8px;
+  background-color: #ffffff;
+}
+
+.example-text {
+  display: flex;
+  flex-direction: column;
+}
+
+.examples button {
+  flex-shrink: 0;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid #c6ccd8;
+  border-radius: 8px;
+  background-color: #ffffff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.examples button:not(:disabled):hover {
+  border-color: #1f2430;
 }
 
 .conclave-status {
@@ -67,18 +140,139 @@
 }
 
 .answer {
-  margin-bottom: 0;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.panel-title {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.trace-empty {
+  color: #5b6472;
+}
+
+.trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.trace-entry {
+  padding: 0.75rem;
+  border: 1px solid #e2e5ec;
+  border-left: 4px solid #2e7d32;
+  border-radius: 8px;
+  background-color: #fafbfc;
+}
+
+.trace-entry--error {
+  border-left-color: #a12424;
+  background-color: #fdf5f5;
+}
+
+.trace-entry-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+.trace-sequence {
+  color: #5b6472;
+}
+
+.trace-badge {
+  padding: 0 0.5rem;
+  border-radius: 999px;
+  background-color: #e6f2e7;
+  color: #1e5e22;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.trace-badge--error {
+  background-color: #f7dcdc;
+  color: #7d1717;
+}
+
+.trace-duration {
+  margin-left: auto;
+  color: #5b6472;
+  font-weight: 400;
+}
+
+.trace-error-code {
+  margin: 0.5rem 0 0;
+  color: #a12424;
+  font-weight: 600;
+}
+
+.trace-summary {
+  margin-top: 0.5rem;
+}
+
+.trace-summary summary {
+  cursor: pointer;
+  color: #3b4252;
+}
+
+.trace-summary pre {
+  margin: 0.5rem 0 0;
+  padding: 0.5rem;
+  overflow-x: auto;
+  border-radius: 6px;
+  background-color: #f0f2f6;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.trace-no-output {
+  margin: 0.5rem 0 0;
+  color: #5b6472;
+}
+
+.execution-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.execution-item {
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  background-color: #f0f2f6;
+}
+
+.execution-item dt {
+  font-size: 0.85rem;
+  color: #5b6472;
+}
+
+.execution-item dd {
+  margin: 0.15rem 0 0;
+  font-weight: 700;
 }
 
 .status-error {
   color: #a12424;
 }
 
-@media (max-width: 480px) {
-  .conclave-form button {
+@media (max-width: 520px) {
+  .conclave-form > button {
     align-self: stretch;
     text-align: center;
+  }
+
+  .example-item {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

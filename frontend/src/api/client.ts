@@ -1,16 +1,23 @@
-import type { ApiError, LlmRequest, LlmResponse } from '../types'
+import type { AgentRequest, AgentResponse, ApiError } from '../types'
+import {
+  parseAgentResponse,
+  ResponseValidationError,
+} from '../validation'
 
 const API_BASE_URL: string =
   import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
 
-const LLM_ENDPOINT: string = `${API_BASE_URL.replace(/\/+$/, '')}/api/p2/llm`
+const AGENT_ENDPOINT: string = `${API_BASE_URL.replace(/\/+$/, '')}/api/p3/agent`
 
-export async function sendMessage(message: string): Promise<LlmResponse> {
-  const requestBody: LlmRequest = { message }
+export async function runAgent(
+  instruction: string,
+  document: string,
+): Promise<AgentResponse> {
+  const requestBody: AgentRequest = { instruction, document }
 
   let response: Response
   try {
-    response = await fetch(LLM_ENDPOINT, {
+    response = await fetch(AGENT_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
@@ -28,7 +35,20 @@ export async function sendMessage(message: string): Promise<LlmResponse> {
 
   const body: unknown = await readJson(response)
 
-  return parseResponse(body)
+  try {
+    return parseAgentResponse(body)
+  } catch (error) {
+    if (error instanceof ResponseValidationError) {
+      throw {
+        kind: 'malformed',
+        message: `Réponse du serveur dans un format inattendu : ${error.message}`,
+      } satisfies ApiError
+    }
+    throw {
+      kind: 'malformed',
+      message: 'Réponse du serveur dans un format inattendu.',
+    } satisfies ApiError
+  }
 }
 
 async function readJson(response: Response): Promise<unknown> {
@@ -64,23 +84,13 @@ async function tryReadDetail(response: Response): Promise<string | undefined> {
   return undefined
 }
 
-function parseResponse(body: unknown): LlmResponse {
-  if (!isRecord(body) || typeof body.answer !== 'string' || typeof body.model !== 'string') {
-    throw {
-      kind: 'malformed',
-      message: 'Le serveur a répondu avec un format inattendu (champs answer/model attendus).',
-    } satisfies ApiError
-  }
-  return { answer: body.answer, model: body.model }
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function defaultStatusMessage(status: number): string {
   if (status === 422) {
-    return 'Saisie invalide : le backend a refusé le message (code 422).'
+    return 'Entrée invalide : instruction ou document refusé par le backend (code 422).'
   }
   if (status === 500) {
     return 'Configuration serveur absente côté backend (code 500).'

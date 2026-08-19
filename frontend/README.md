@@ -1,18 +1,19 @@
-# CONCLAVE — Frontend (Palier 2)
+# CONCLAVE — Frontend (Palier 3 « Le premier outil »)
 
-Application React + TypeScript + Vite qui envoie un message au backend
-`POST /api/p2/llm` et affiche la réponse réelle du modèle MiniMax-M3.
+Application React + TypeScript + Vite qui envoie un document et une instruction
+naturelle au backend `POST /api/p3/agent` puis affiche la réponse de
+MiniMax-M3, la trace des outils appelés et les métriques d'exécution.
 
 ## Démarrage rapide
 
-Copiez d'abord le fichier d'exemple d'environnement :
+Copiez le fichier d'exemple d'environnement (variable non secrète) :
 
 ```bash
 cp frontend/.env.example frontend/.env
 ```
 
 `VITE_API_BASE_URL` pointe par défaut sur `http://localhost:8000`.
-Cette variable n'est pas secrète : aucune clé API ne doit être placée dans le front.
+Aucune clé MiniMax ne doit être placée dans le front : elle vit côté backend.
 
 Installez puis lancez le serveur de développement :
 
@@ -26,7 +27,7 @@ npm run dev
 
 ```bash
 npm run lint    # ESLint
-npm run build   # tsc -b + vite build
+npm run build   # tsc -b + vite build (vérification de types incluse)
 ```
 
 Le parcours complet (clone → backend → frontend → test) est décrit dans le
