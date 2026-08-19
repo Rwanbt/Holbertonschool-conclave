@@ -1,0 +1,772 @@
+"""Experts, Arbitre et orchestration de l'analyse — Palier 4.
+
+Flot :
+    1. Trois experts (avocat, procureur, comptable) tournent en parallèle via
+       asyncio.gather(..., return_exceptions=True), sans ordre de fin supposé.
+    2. Chaque expert exécute la boucle générique ``run_agent_loop`` avec son
+       prompt de rôle, un garde-fou de temps (expert_timeout_seconds), et
+       produit en sortie finale un objet JSON ``AgentOutput`` validé par
+       Pydantic (une seule tentative de réparation structurée).
+    3. Avec au moins deux sorties valides, l'Arbitre reçoit UNIQUEMENT le
+       document et les sorties validées, produit un ``ArbiterVerdict`` validé,
+       et l'analyse se termine en ``completed`` (ou ``degraded`` si un expert
+       manque). En cas de panne de l'Arbitre, les sorties des experts restent
+       visibles et l'analyse passe en ``failed`` (error_code=arbiter_error).
+    4. Avec 0 ou 1 sortie valide, l'analyse échoue (``failed``) sans verdict.
+    5. Le tout est borné par ``analysis_timeout_seconds``.
+
+Le document peut être transmis à MiniMax pour ces rôles (SPEC) mais n'est
+jamais journalisé : les événements et traces ne contiennent que des résumés.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable
+
+from pydantic import ValidationError
+
+from . import db
+from .agent import AgentLoopResult, AgentSession, run_agent_loop
+from .config import Settings
+from .llm import build_client
+from .schemas import (
+    AgentOutput,
+    ArbiterVerdict,
+    ExecutionUsage,
+    ExpertRole,
+    ToolTraceEntry,
+)
+
+EXPERT_ROLES: tuple[ExpertRole, ...] = ("avocat", "procureur", "comptable")
+
+SYSTEM_PROMPTS: dict[ExpertRole, str] = {
+    "avocat": (
+        "Tu es l'expert AVOCAT de l'analyse documentaire CONCLAVE. "
+        "Le document te parvient dans le message utilisateur. "
+        "Tu peux utiliser les outils serveur sans argument (métriques, indices "
+        "de sécurité, coût) pour étayer ton argumentaire. "
+        "Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les "
+        "tour à tour. "
+        "Rédige une plaidoirie de la solution proposée par le document, en t'appuyant "
+        "sur des faits vérifiables. "
+        "Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma "
+        "AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence, "
+        "impact, priority low|medium|high), score_label, score (0-100), "
+        "recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON."
+    ),
+    "procureur": (
+        "Tu es l'expert PROCUREUR de l'analyse documentaire CONCLAVE. "
+        "Le document te parvient dans le message utilisateur. "
+        "Tu peux utiliser les outils serveur sans argument (métriques, indices "
+        "de sécurité, coût) pour étayer ton réquisitoire. "
+        "Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les "
+        "tour à tour. "
+        "Démontre les risques, faiblesses et objections que le document soulève, "
+        "en t'appuyant sur des faits vérifiables. "
+        "Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma "
+        "AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence, "
+        "impact, priority low|medium|high), score_label, score (0-100), "
+        "recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON."
+    ),
+    "comptable": (
+        "Tu es l'expert COMPTABLE de l'analyse documentaire CONCLAVE. "
+        "Le document te parvient dans le message utilisateur. "
+        "Tu dois d'abord observer les métriques du document, puis estimer le coût "
+        "d'une analyse, puis seulement conclure. "
+        "Un seul outil par tour : au premier tour, demande les métriques ; au tour "
+        "suivant, demande l'estimation du coût. "
+        "Tu ne produis JAMAIS une conclusion chiffrée sans avoir observé les métriques "
+        "réelles ni une estimation de coût sans données réelles : si ces mesures "
+        "manquent, tu le signales dans summary et findings sans inventer de valeur. "
+        "Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma "
+        "AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence, "
+        "impact, priority low|medium|high), score_label, score (0-100), "
+        "recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON."
+    ),
+}
+
+ARBITER_SYSTEM_PROMPT: str = (
+    "Tu es l'ARBITRE de l'analyse documentaire CONCLAVE. "
+    "Tu reçois le document et les sorties validées des experts (avocat, "
+    "procureur, comptable). "
+    "Tu peux aussi utiliser les outils serveur sans argument si tu dois vérifier "
+    "un chiffre, mais ce n'est pas obligatoire. "
+    "Départage les désaccords, puis rends une décision finale. "
+    "Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma "
+    "ArbiterVerdict : decision (go|go_with_conditions|no_go), score (0-100), "
+    "main_disagreement, priority_risks (0 a 3), actions (0 a 3), accepted_tradeoff, "
+    "unavailable_agents. Pas de texte hors du JSON."
+)
+
+AgentOutputValidator = Callable[[str, dict[str, Any]], AgentOutput]
+ArbiterValidator = Callable[[dict[str, Any]], ArbiterVerdict]
+
+_AGENT_OUTPUT_FIELDS = {
+    "role",
+    "summary",
+    "findings",
+    "score_label",
+    "score",
+    "recommendations",
+    "unavailable_tools",
+}
+_ARBITER_FIELDS = {
+    "decision",
+    "score",
+    "main_disagreement",
+    "priority_risks",
+    "actions",
+    "accepted_tradeoff",
+    "unavailable_agents",
+}
+
+
+def validate_agent_output(role: ExpertRole, data: dict[str, Any]) -> AgentOutput:
+    """Valide strictement une sortie d'expert. Lève ValidationError sinon."""
+    return AgentOutput(**{**data, "role": role})
+
+
+def validate_arbiter_verdict(data: dict[str, Any]) -> ArbiterVerdict:
+    return ArbiterVerdict(**data)
+
+
+def _first_findings_without_evidence(data: dict[str, Any]) -> str | None:
+    findings = data.get("findings") or []
+    for finding in findings:
+        if not isinstance(finding, dict) or not finding.get("evidence"):
+            return "au moins un constat est vide ou sans evidence"
+    return None
+
+
+def extract_structured_json(content: str) -> dict[str, Any] | None:
+    """Extrait le premier objet JSON d'un texte (supporte la poésie du modèle)."""
+    content = content.strip()
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, dict):
+            return parsed
+        return None
+    except json.JSONDecodeError:
+        pass
+    start = content.find("{")
+    end = content.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        return None
+    try:
+        parsed = json.loads(content[start : end + 1])
+        return parsed if isinstance(parsed, dict) else None
+    except json.JSONDecodeError:
+        return None
+
+
+@dataclass
+class ExpertRunResult:
+    role: ExpertRole
+    run_id: str
+    output: AgentOutput | None
+    error_code: str | None
+    usage: ExecutionUsage
+    executed_tools: list[str] = field(default_factory=list)
+    trace: list[ToolTraceEntry] = field(default_factory=list)
+    timed_out: bool = False
+
+
+@dataclass
+class AnalysisResult:
+    analysis_id: str
+    status: str
+    error_code: str | None
+    experts: list[ExpertRunResult]
+    verdict: ArbiterVerdict | None
+    usage: ExecutionUsage
+
+
+def _empty_usage() -> ExecutionUsage:
+    return ExecutionUsage(
+        input_tokens=None,
+        output_tokens=None,
+        total_tokens=None,
+        estimated_cost_usd=None,
+        total_latency_ms=0,
+        llm_rounds=0,
+    )
+
+
+def _merge_usage(usages: list[ExecutionUsage]) -> ExecutionUsage:
+    merged = _empty_usage()
+    inputs: list[int] = []
+    outputs: list[int] = []
+    totals: list[int] = []
+    for usage in usages:
+        merged.total_latency_ms += usage.total_latency_ms
+        merged.llm_rounds += usage.llm_rounds
+        if usage.input_tokens is not None:
+            inputs.append(usage.input_tokens)
+        if usage.output_tokens is not None:
+            outputs.append(usage.output_tokens)
+        if usage.total_tokens is not None:
+            totals.append(usage.total_tokens)
+        if usage.estimated_cost_usd is not None and merged.estimated_cost_usd is not None:
+            merged.estimated_cost_usd += usage.estimated_cost_usd
+        elif usage.estimated_cost_usd is not None:
+            merged.estimated_cost_usd = usage.estimated_cost_usd
+    if inputs:
+        merged.input_tokens = sum(inputs)
+    if outputs:
+        merged.output_tokens = sum(outputs)
+    if totals:
+        merged.total_tokens = sum(totals)
+    return merged
+
+
+async def _repair_structured_output(
+    client,
+    messages: list[dict[str, Any]],
+    settings: Settings,
+    error_hint: str,
+    max_output_tokens: int | None = None,
+) -> str | None:
+    """Une seule tentative de réparation : nouvel appel MiniMax sans outils."""
+    output_budget = max_output_tokens or settings.minimax_max_output_tokens
+    messages = messages + [
+        {
+            "role": "user",
+            "content": (
+                "Ta réponse n'est pas valide : " + error_hint + ". "
+                "Renvoie UNIQUEMENT le JSON corrigé, conforme au schéma demandé, "
+                "sans texte hors JSON."
+            ),
+        }
+    ]
+    try:
+        completion = await client.chat.completions.create(
+            model=settings.minimax_model,
+            messages=messages,
+            max_completion_tokens=output_budget,
+            temperature=0.3,
+            n=1,
+            tools=[],
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    if not completion.choices:
+        return None
+    content = (completion.choices[0].message.content or "").strip()
+    return content or None
+
+
+async def run_expert(
+    role: ExpertRole,
+    *,
+    analysis_id: str,
+    document: str,
+    session: AgentSession,
+    settings: Settings,
+    get_connection: Callable[[], Awaitable[Any]],
+) -> ExpertRunResult:
+    """Exécute un expert : boucle d'outils puis sortie JSON validée (1 réparation)."""
+    run_id = uuid.uuid4().hex
+    started_at = db.utc_now_iso()
+
+    async def emit(event_type: str, payload: dict[str, Any]) -> None:
+        async with (await get_connection()) as conn:
+            await db.insert_analysis_event(
+                conn, analysis_id, event_type, payload, db.utc_now_iso()
+            )
+
+    async def sink(kind: str, fields: dict[str, Any]) -> None:
+        now = db.utc_now_iso()
+        async with (await get_connection()) as conn:
+            if kind == "tool.completed" or kind == "tool.failed":
+                await db.insert_tool_event(
+                    conn,
+                    analysis_id=analysis_id,
+                    agent_role=role,
+                    llm_round=fields["llm_round"],
+                    sequence=fields["sequence"],
+                    tool_name=fields["tool_name"],
+                    status=fields["status"],
+                    input_summary_json=json.dumps(
+                        fields["input_summary"], ensure_ascii=False
+                    ),
+                    output_summary_json=(
+                        json.dumps(fields["output_summary"], ensure_ascii=False)
+                        if fields.get("output_summary") is not None
+                        else None
+                    ),
+                    duration_ms=fields["duration_ms"],
+                    error_code=fields.get("error_code"),
+                    now=now,
+                )
+            event_type = (
+                "tool.started" if kind == "tool.started" else "tool.completed"
+                if kind == "tool.completed"
+                else "tool.failed"
+            )
+            await db.insert_analysis_event(
+                conn,
+                analysis_id,
+                event_type,
+                {
+                    "analysis_id": analysis_id,
+                    "agent_role": role,
+                    "llm_round": fields["llm_round"],
+                    "tool_name": fields["tool_name"],
+                    "status": fields.get("status", "started"),
+                },
+                now,
+            )
+
+    async with (await get_connection()) as conn:
+        await db.upsert_expert_run(
+            conn,
+            run_id,
+            analysis_id,
+            role,
+            "running",
+            started_at=started_at,
+        )
+    await emit(
+        "expert.started",
+        {"analysis_id": analysis_id, "role": role, "started_at": started_at},
+    )
+
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": SYSTEM_PROMPTS[role]},
+        {"role": "user", "content": document},
+    ]
+
+    async def run() -> AgentLoopResult:
+        return await run_agent_loop(
+            messages,
+            session,
+            settings,
+            max_rounds=max(1, settings.agent_max_rounds),
+            one_tool_per_round=True,
+            tool_event_sink=sink,
+            agent_role=role,
+            get_connection=get_connection,
+            max_output_tokens=settings.expert_max_output_tokens,
+        )
+
+    try:
+        loop_result = await asyncio.wait_for(
+            run(), timeout=settings.expert_timeout_seconds
+        )
+    except asyncio.TimeoutError:
+        await emit("expert.timeout", {"analysis_id": analysis_id, "role": role})
+        async with (await get_connection()) as conn:
+            await db.upsert_expert_run(
+                conn,
+                run_id,
+                analysis_id,
+                role,
+                "timeout",
+                error_code="expert_timeout",
+                started_at=started_at,
+                completed_at=db.utc_now_iso(),
+            )
+        return ExpertRunResult(
+            role=role,
+            run_id=run_id,
+            output=None,
+            error_code="expert_timeout",
+            usage=_empty_usage(),
+            executed_tools=[],
+            trace=[],
+            timed_out=True,
+        )
+
+    output: AgentOutput | None = None
+    error_code: str | None = None
+
+    raw = (loop_result.answer or "").strip()
+    if not raw:
+        error_code = loop_result.stop_reason or "empty_output"
+    else:
+        data = extract_structured_json(raw)
+        hint = None
+        if data is None:
+            hint = "la sortie n'est pas un objet JSON valide"
+        elif not _AGENT_OUTPUT_FIELDS.issubset(data.keys()):
+            missing = sorted(_AGENT_OUTPUT_FIELDS - set(data.keys()))
+            hint = "champs manquants : " + ", ".join(missing)
+        elif _first_findings_without_evidence(data) is not None:
+            hint = _first_findings_without_evidence(data)
+        elif role == "comptable" and (
+            "measure_current_document" not in loop_result.executed_tools
+            or "estimate_current_analysis_cost" not in loop_result.executed_tools
+        ):
+            hint = (
+                "une conclusion chiffrée ne peut pas être validée sans avoir "
+                "observé les métriques réelles puis estimé le coût"
+            )
+        if hint is None:
+            try:
+                output = validate_agent_output(role, data)
+            except ValidationError as exc:
+                hint = "erreurs de validation : " + str(exc.errors()[:3])
+        if hint is not None:
+            async with build_client(settings) as client:
+                repaired = await _repair_structured_output(
+                    client,
+                    messages,
+                    settings,
+                    hint,
+                    max_output_tokens=settings.expert_max_output_tokens,
+                )
+            if repaired:
+                repaired_data = extract_structured_json(repaired)
+                if repaired_data is not None:
+                    try:
+                        output = validate_agent_output(role, repaired_data)
+                    except ValidationError:
+                        output = None
+                    else:
+                        if role == "comptable":
+                            repaired_executed = loop_result.executed_tools
+                            if (
+                                "measure_current_document" not in repaired_executed
+                                or "estimate_current_analysis_cost"
+                                not in repaired_executed
+                            ):
+                                output = None
+            if output is None:
+                error_code = "structured_output_error"
+
+    if output is not None:
+        async with (await get_connection()) as conn:
+            await db.upsert_expert_run(
+                conn,
+                run_id,
+                analysis_id,
+                role,
+                "completed",
+                output_json=output.model_dump_json(),
+                started_at=started_at,
+                completed_at=db.utc_now_iso(),
+            )
+        await emit(
+            "expert.completed",
+            {"analysis_id": analysis_id, "role": role},
+        )
+    else:
+        error_code = error_code or "structured_output_error"
+        async with (await get_connection()) as conn:
+            await db.upsert_expert_run(
+                conn,
+                run_id,
+                analysis_id,
+                role,
+                "error",
+                error_code=error_code,
+                started_at=started_at,
+                completed_at=db.utc_now_iso(),
+            )
+        await emit(
+            "expert.failed",
+            {"analysis_id": analysis_id, "role": role, "error_code": error_code},
+        )
+
+    return ExpertRunResult(
+        role=role,
+        run_id=run_id,
+        output=output,
+        error_code=error_code,
+        usage=loop_result.usage,
+        executed_tools=loop_result.executed_tools,
+        trace=loop_result.trace,
+    )
+
+
+async def run_arbiter(
+    *,
+    analysis_id: str,
+    document: str,
+    session: AgentSession,
+    valid_outputs: list[AgentOutput],
+    unavailable_agents: list[ExpertRole],
+    settings: Settings,
+    get_connection: Callable[[], Awaitable[Any]],
+) -> tuple[ArbiterVerdict | None, ExecutionUsage]:
+    """Arbitre : reçoit document + sorties validées, rend un verdict JSON validé."""
+    async def emit(event_type: str, payload: dict[str, Any]) -> None:
+        async with (await get_connection()) as conn:
+            await db.insert_analysis_event(
+                conn, analysis_id, event_type, payload, db.utc_now_iso()
+            )
+
+    async def sink(kind: str, fields: dict[str, Any]) -> None:
+        now = db.utc_now_iso()
+        async with (await get_connection()) as conn:
+            if kind in ("tool.completed", "tool.failed"):
+                await db.insert_tool_event(
+                    conn,
+                    analysis_id=analysis_id,
+                    agent_role="arbitre",
+                    llm_round=fields["llm_round"],
+                    sequence=fields["sequence"],
+                    tool_name=fields["tool_name"],
+                    status=fields["status"],
+                    input_summary_json=json.dumps(
+                        fields["input_summary"], ensure_ascii=False
+                    ),
+                    output_summary_json=(
+                        json.dumps(fields["output_summary"], ensure_ascii=False)
+                        if fields.get("output_summary") is not None
+                        else None
+                    ),
+                    duration_ms=fields["duration_ms"],
+                    error_code=fields.get("error_code"),
+                    now=now,
+                )
+            event_type = (
+                "tool.started" if kind == "tool.started" else "tool.completed"
+                if kind == "tool.completed"
+                else "tool.failed"
+            )
+            await db.insert_analysis_event(
+                conn,
+                analysis_id,
+                event_type,
+                {
+                    "analysis_id": analysis_id,
+                    "agent_role": "arbitre",
+                    "llm_round": fields["llm_round"],
+                    "tool_name": fields["tool_name"],
+                    "status": fields.get("status", "started"),
+                },
+                now,
+            )
+
+    await emit(
+        "arbiter.started",
+        {
+            "analysis_id": analysis_id,
+            "expert_outputs": [output.role for output in valid_outputs],
+        },
+    )
+
+    expert_payload = [
+        output.model_dump(mode="json") for output in valid_outputs
+    ]
+    messages: list[dict[str, Any]] = [
+        {"role": "system", "content": ARBITER_SYSTEM_PROMPT},
+        {"role": "user", "content": document},
+        {
+            "role": "user",
+            "content": (
+                "Trois experts étaient attendus : avocat, procureur, comptable. "
+                f"Sorties reçues : {[o.role for o in valid_outputs]}. "
+                f"Experts absents : {unavailable_agents}. "
+                "Renvoie ces experts absents dans unavailable_agents de ton verdict. "
+                "Sorties validées des experts :\n"
+                + json.dumps(expert_payload, ensure_ascii=False)
+            ),
+        },
+    ]
+
+    async def run() -> AgentLoopResult:
+        return await run_agent_loop(
+            messages,
+            session,
+            settings,
+            max_rounds=max(1, settings.agent_max_rounds),
+            one_tool_per_round=True,
+            tool_event_sink=sink,
+            agent_role="arbitre",
+            get_connection=get_connection,
+            max_output_tokens=settings.expert_max_output_tokens,
+        )
+
+    try:
+        loop_result = await asyncio.wait_for(
+            run(), timeout=settings.arbiter_timeout_seconds
+        )
+    except asyncio.TimeoutError:
+        await emit(
+            "arbiter.failed",
+            {"analysis_id": analysis_id, "error_code": "arbiter_timeout"},
+        )
+        return None, _empty_usage()
+
+    raw = (loop_result.answer or "").strip()
+    verdict: ArbiterVerdict | None = None
+    if raw:
+        data = extract_structured_json(raw)
+        hint = None
+        if data is None:
+            hint = "ta sortie n'est pas un objet JSON valide"
+        elif not _ARBITER_FIELDS.issubset(data.keys()):
+            missing = sorted(_ARBITER_FIELDS - set(data.keys()))
+            hint = "champs manquants : " + ", ".join(missing)
+        if hint is None:
+            try:
+                verdict = validate_arbiter_verdict(data)
+            except ValidationError as exc:
+                hint = "erreurs de validation : " + str(exc.errors()[:3])
+        if hint is not None:
+            async with build_client(settings) as client:
+                repaired = await _repair_structured_output(
+                    client,
+                    messages,
+                    settings,
+                    hint,
+                    max_output_tokens=settings.expert_max_output_tokens,
+                )
+            if repaired:
+                repaired_data = extract_structured_json(repaired)
+                if repaired_data is not None:
+                    try:
+                        verdict = validate_arbiter_verdict(repaired_data)
+                    except ValidationError:
+                        verdict = None
+
+    if verdict is not None:
+        await emit(
+            "arbiter.completed",
+            {"analysis_id": analysis_id, "decision": verdict.decision},
+        )
+    else:
+        await emit(
+            "arbiter.failed",
+            {"analysis_id": analysis_id, "error_code": "structured_output_error"},
+        )
+    return verdict, loop_result.usage
+
+
+async def run_analysis(
+    analysis_id: str,
+    document: str,
+    settings: Settings,
+    get_connection: Callable[[], Awaitable[Any]],
+) -> AnalysisResult:
+    """Orchestration complète d'une analyse (statuts, événements, persistance)."""
+    session = AgentSession(document=document)
+    started_at = db.utc_now_iso()
+
+    async with (await get_connection()) as conn:
+        await db.set_analysis_started(conn, analysis_id, started_at)
+
+    results: list[ExpertRunResult] = []
+
+    async def run_one(role: ExpertRole) -> ExpertRunResult:
+        return await run_expert(
+            role,
+            analysis_id=analysis_id,
+            document=document,
+            session=session,
+            settings=settings,
+            get_connection=get_connection,
+        )
+
+    tasks = [run_one(role) for role in EXPERT_ROLES]
+    try:
+        outcomes = await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=settings.analysis_timeout_seconds,
+        )
+    except asyncio.TimeoutError:
+        async with (await get_connection()) as conn:
+            await db.set_analysis_status(
+                conn,
+                analysis_id,
+                "failed",
+                completed_at=db.utc_now_iso(),
+                error_code="analysis_timeout",
+            )
+            await db.insert_analysis_event(
+                conn,
+                analysis_id,
+                "analysis.failed",
+                {"analysis_id": analysis_id, "error_code": "analysis_timeout"},
+                db.utc_now_iso(),
+            )
+        return AnalysisResult(
+            analysis_id=analysis_id,
+            status="failed",
+            error_code="analysis_timeout",
+            experts=[],
+            verdict=None,
+            usage=_empty_usage(),
+        )
+
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            continue
+        results.append(outcome)
+
+    valid = [r.output for r in results if r.output is not None]
+    valid_roles = {output.role for output in valid}
+    missing_roles = [
+        role for role in EXPERT_ROLES if role not in valid_roles
+    ]
+    verdict: ArbiterVerdict | None = None
+    arbiter_usage = _empty_usage()
+
+    if len(valid) >= 2:
+        verdict, arbiter_usage = await run_arbiter(
+            analysis_id=analysis_id,
+            document=document,
+            session=session,
+            valid_outputs=valid,
+            unavailable_agents=missing_roles,
+            settings=settings,
+            get_connection=get_connection,
+        )
+        if verdict is not None and missing_roles:
+            # Informations structurelles connues du seul orchestrateur : imposées.
+            verdict.unavailable_agents = missing_roles
+
+    if verdict is not None:
+        all_three = all(r.output is not None for r in results)
+        status = "completed" if all_three else "degraded"
+        error_code = None
+    elif len(valid) >= 2:
+        status = "failed"
+        error_code = "arbiter_error"
+    else:
+        status = "failed"
+        error_code = "insufficient_expertise"
+
+    merged = _merge_usage([r.usage for r in results] + [arbiter_usage])
+    completed_at = db.utc_now_iso()
+
+    async with (await get_connection()) as conn:
+        await db.set_analysis_status(
+            conn, analysis_id, status, completed_at=completed_at, error_code=error_code
+        )
+        await db.set_analysis_usage(conn, analysis_id, merged.model_dump_json())
+        if verdict is not None:
+            await db.set_analysis_verdict(
+                conn, analysis_id, verdict.model_dump_json()
+            )
+        event_type = {
+            "completed": "analysis.completed",
+            "degraded": "analysis.degraded",
+            "failed": "analysis.failed",
+        }[status]
+        await db.insert_analysis_event(
+            conn,
+            analysis_id,
+            event_type,
+            {
+                "analysis_id": analysis_id,
+                "status": status,
+                "error_code": error_code,
+            },
+            completed_at,
+        )
+
+    return AnalysisResult(
+        analysis_id=analysis_id,
+        status=status,
+        error_code=error_code,
+        experts=results,
+        verdict=verdict,
+        usage=merged,
+    )

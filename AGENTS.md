@@ -103,3 +103,132 @@ réponse finale (ou non-vérification) + trace + usage
   TokenMix, TokenCost, AI//COST). **Estimatifs** : seule la facturation réelle
   MiniMax fait foi ; si les tarifs ne sont pas configurés (0.0 ou absents),
   `estimated_cost_usd` reste `null` et le coût n'est pas revendiqué.
+
+---
+
+# Agent CONCLAVE — Palier 4 (experts, arbitre, persistance SQLite, SSE)
+
+Ce fichier documente le contrat des trois experts et de l'Arbitre. Toute
+modification des prompts système, des schémas de sortie ou des garde-fous doit
+être faite dans `backend/app/experts.py` PUIS recopiée ici (et inversement).
+
+## Prompts système des experts (recopiés tels quels — backend/app/experts.py)
+
+```text
+AVOCAT :
+Tu es l'expert AVOCAT de l'analyse documentaire CONCLAVE.
+Le document te parvient dans le message utilisateur.
+Tu peux utiliser les outils serveur sans argument (métriques, indices
+de sécurité, coût) pour étayer ton argumentaire.
+Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les
+tour à tour.
+Rédige une plaidoirie de la solution proposée par le document, en t'appuyant
+sur des faits vérifiables.
+Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma
+AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence,
+impact, priority low|medium|high), score_label, score (0-100),
+recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON.
+
+PROCUREUR :
+Tu es l'expert PROCUREUR de l'analyse documentaire CONCLAVE.
+Le document te parvient dans le message utilisateur.
+Tu peux utiliser les outils serveur sans argument (métriques, indices
+de sécurité, coût) pour étayer ton réquisitoire.
+Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les
+tour à tour.
+Démontre les risques, faiblesses et objections que le document soulève,
+en t'appuyant sur des faits vérifiables.
+Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma
+AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence,
+impact, priority low|medium|high), score_label, score (0-100),
+recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON.
+
+COMPTABLE :
+Tu es l'expert COMPTABLE de l'analyse documentaire CONCLAVE.
+Le document te parvient dans le message utilisateur.
+Tu dois d'abord observer les métriques du document, puis estimer le coût
+d'une analyse, puis seulement conclure.
+Un seul outil par tour : au premier tour, demande les métriques ; au tour
+suivant, demande l'estimation du coût.
+Tu ne produis JAMAIS une conclusion chiffrée sans avoir observé les métriques
+réelles ni une estimation de coût sans données réelles : si ces mesures
+manquent, tu le signales dans summary et findings sans inventer de valeur.
+Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma
+AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence,
+impact, priority low|medium|high), score_label, score (0-100),
+recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON.
+
+ARBITRE :
+Tu es l'ARBITRE de l'analyse documentaire CONCLAVE.
+Tu reçois le document et les sorties validées des experts (avocat,
+procureur, comptable).
+Tu peux aussi utiliser les outils serveur sans argument si tu dois vérifier
+un chiffre, mais ce n'est pas obligatoire.
+Départage les désaccords, puis rends une décision finale.
+Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma
+ArbiterVerdict : decision (go|go_with_conditions|no_go), score (0-100),
+main_disagreement, priority_risks (0 a 3), actions (0 a 3), accepted_tradeoff,
+unavailable_agents. Pas de texte hors du JSON.
+```
+
+## Boucle Palier 4
+
+```text
+POST /api/analyses → analysis.created (persisté) → 3 experts en asyncio.gather
+   │  chaque expert : boucle générique run_agent_loop (1 outil/tour, bornée)
+   │   → outil réel (état SQLite vérifié) → événements tool.* persistés
+   │   → JSON AgentOutput validé (1 réparation structurée max)
+   ▼
+≥ 2 sorties valides ? ── non → analysis.failed (insufficient_expertise)
+   │ oui
+Arbitre (document + sorties validées + experts absents) → ArbiterVerdict validé
+   │  verdict ok et 3 experts → analysis.completed
+   │  verdict ok et 2 experts → analysis.degraded (unavailable_agents imposés)
+   │  verdict absent après experts valides → analysis.failed (arbiter_error)
+   ▼
+événement terminal persisté → SSE fermé
+```
+
+## Garde-fous Palier 4
+
+- **Un seul outil par tour** pour les experts et l'Arbitre : si MiniMax demande
+  plusieurs outils, seul le premier est exécuté, les autres reçoivent
+  `one_tool_per_round` (chaque `tool_call_id` est toujours répondu).
+- **Validation structurée** : toute sortie LLM passe par `AgentOutput` ou
+  `ArbiterVerdict` (Pydantic) avant stockage, avant l'Arbitre, avant le front.
+  Une seule réparation (message générique, ne nomme jamais d'outil) ; sinon le
+  run passe en `error` (`structured_output_error`).
+- **Comptable sans preuve = refusé** : une conclusion chiffrée sans les métriques
+  et l'estimation de coût réellement exécutées est rejetée par le validateur
+  (contrôle structurel de la trace, message générique sans nommer d'outil).
+- **Garde-fous de temps** : `expert_timeout_seconds` (30), `arbiter_timeout_seconds`
+  (20), `analysis_timeout_seconds` (60). Codes : `expert_timeout`,
+  `arbiter_timeout`, `analysis_timeout`.
+- **Boucle bornée** : `AGENT_MAX_ROUNDS` (5) ; codes `max_rounds_reached` et
+  `repeated_tool_call` arrêtent proprement.
+- **Outils désactivés pendant une analyse** : état lu depuis `tool_states`
+  (SQLite) à chaque exécution ; un outil désactivé → `tool_disabled` (trace +
+  événement `tool.failed`), sans 500.
+- **Document jamais journalisé** : les événements SSE et les traces ne
+  contiennent que des résumés bornés ; le document ne va à MiniMax que dans le
+  message des rôles experts/arbitre.
+- **Analyse en cours au redémarrage** → `interrupted` ; les résultats déjà
+  persistés restent consultables.
+
+## Commandes `/tools`
+
+Grammaire stricte (`backend/app/toolkit.py::parse_tool_command`) :
+`/tools`, `/tools list`, `/tools enable <name>`, `/tools disable <name>`.
+Syntaxe ou nom inconnu → **422 sans modification partielle**. État persistant
+dans `tool_states` (source de vérité) ; `DISABLED_TOOLS` ne fait qu'initialiser
+une base neuve.
+
+## Événements SSE
+
+`analysis.created`, `expert.started`, `tool.started`, `tool.completed`,
+`tool.failed`, `expert.completed`, `expert.failed`, `expert.timeout`,
+`arbiter.started`, `arbiter.completed`, `arbiter.failed`,
+`analysis.completed`, `analysis.degraded`, `analysis.failed`,
+`analysis.interrupted` (au redémarrage). Chaque événement est écrit en base
+avant d'être diffusé (identifiant entier croissant) ; reprise via
+`Last-Event-ID` ou `?after=<id>`.
