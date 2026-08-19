@@ -1,20 +1,22 @@
-"""Application FastAPI CONCLAVE — Palier 1-2.
+"""Application FastAPI CONCLAVE — Palier 1-3.
 
-Routes (temporaires pour ce palier, sans SSE ni agents) :
-- GET  /api/health  -> {"status": "ok"}
-- POST /api/p2/llm  -> {"answer": str, "model": "MiniMax-M3"}
+Routes :
+- GET  /api/health      -> {"status": "ok"}
+- POST /api/p2/llm      -> {"answer": str, "model": "MiniMax-M3"} (tuyau seul)
+- POST /api/p3/agent    -> {"answer", "model", "trace", "usage"} (boucle agent)
 
 La future route POST /api/analyses (SSE) appartient aux paliers suivants ;
-/api/p2/llm n'en est pas une implémentation précoce, juste un test du tuyau.
+les routes p2/p3 en sont des jalons temporaires, pas des implémentations
+précoces de celle-ci.
 """
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import llm
+from . import agent, llm
 from .config import Settings, get_settings
-from .schemas import LLMRequest, LLMResponse
+from .schemas import AgentRequest, AgentResponse, LLMRequest, LLMResponse
 
 app = FastAPI(
     title="CONCLAVE backend",
@@ -65,3 +67,25 @@ async def p2_llm(
         )
 
     return LLMResponse(answer=answer, model=settings.minimax_model)
+
+
+@app.post("/api/p3/agent", response_model=AgentResponse)
+async def p3_agent(
+    request: AgentRequest,
+    settings: Settings = Depends(get_settings),
+) -> AgentResponse | JSONResponse:
+    if not settings.minimax_api_key:
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "MINIMAX_API_KEY is not configured on the server"},
+        )
+
+    try:
+        return await agent.run_agent(request.instruction, request.document, settings)
+    except llm.ProviderError:
+        return JSONResponse(
+            status_code=502,
+            content={
+                "detail": "MiniMax provider unavailable or returned an unusable answer"
+            },
+        )
