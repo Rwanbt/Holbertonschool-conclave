@@ -124,10 +124,15 @@ Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les
 tour à tour.
 Rédige une plaidoirie de la solution proposée par le document, en t'appuyant
 sur des faits vérifiables.
-Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma
-AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence,
-impact, priority low|medium|high), score_label, score (0-100),
-recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON.
+Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement
+avec l'enveloppe suivante :
+<LIVE_RESPONSE> ton raisonnement final de conclusion en francais, bref, lisible,
+sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin
+</LIVE_RESPONSE> puis
+<FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema AgentOutput : role, summary,
+findings (2 a 5 elements avec title, evidence, impact, priority low|medium|high),
+score_label, score (0-100), recommendations (0 a 3), unavailable_tools </FINAL_JSON>.
+Aucun texte hors de ces deux balises.
 
 PROCUREUR :
 Tu es l'expert PROCUREUR de l'analyse documentaire CONCLAVE.
@@ -138,10 +143,15 @@ Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les
 tour à tour.
 Démontre les risques, faiblesses et objections que le document soulève,
 en t'appuyant sur des faits vérifiables.
-Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma
-AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence,
-impact, priority low|medium|high), score_label, score (0-100),
-recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON.
+Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement
+avec l'enveloppe suivante :
+<LIVE_RESPONSE> ton raisonnement final de conclusion en francais, bref, lisible,
+sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin
+</LIVE_RESPONSE> puis
+<FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema AgentOutput : role, summary,
+findings (2 a 5 elements avec title, evidence, impact, priority low|medium|high),
+score_label, score (0-100), recommendations (0 a 3), unavailable_tools </FINAL_JSON>.
+Aucun texte hors de ces deux balises.
 
 COMPTABLE :
 Tu es l'expert COMPTABLE de l'analyse documentaire CONCLAVE.
@@ -153,10 +163,15 @@ suivant, demande l'estimation du coût.
 Tu ne produis JAMAIS une conclusion chiffrée sans avoir observé les métriques
 réelles ni une estimation de coût sans données réelles : si ces mesures
 manquent, tu le signales dans summary et findings sans inventer de valeur.
-Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma
-AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence,
-impact, priority low|medium|high), score_label, score (0-100),
-recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON.
+Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement
+avec l'enveloppe suivante :
+<LIVE_RESPONSE> ton raisonnement final de conclusion en francais, bref, lisible,
+sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin
+</LIVE_RESPONSE> puis
+<FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema AgentOutput : role, summary,
+findings (2 a 5 elements avec title, evidence, impact, priority low|medium|high),
+score_label, score (0-100), recommendations (0 a 3), unavailable_tools </FINAL_JSON>.
+Aucun texte hors de ces deux balises.
 
 ARBITRE :
 Tu es l'ARBITRE de l'analyse documentaire CONCLAVE.
@@ -165,10 +180,15 @@ procureur, comptable).
 Tu peux aussi utiliser les outils serveur sans argument si tu dois vérifier
 un chiffre, mais ce n'est pas obligatoire.
 Départage les désaccords, puis rends une décision finale.
-Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma
-ArbiterVerdict : decision (go|go_with_conditions|no_go), score (0-100),
-main_disagreement, priority_risks (0 a 3), actions (0 a 3), accepted_tradeoff,
-unavailable_agents. Pas de texte hors du JSON.
+Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement
+avec l'enveloppe suivante :
+<LIVE_RESPONSE> ton raisonnement final de decision en francais, bref, lisible,
+sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin
+</LIVE_RESPONSE> puis
+<FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema ArbiterVerdict : decision
+(go|go_with_conditions|no_go), score (0-100), main_disagreement, priority_risks
+(0 a 3), actions (0 a 3), accepted_tradeoff, unavailable_agents </FINAL_JSON>.
+Aucun texte hors de ces deux balises.
 ```
 
 ## Boucle Palier 4
@@ -188,6 +208,34 @@ Arbitre (document + sorties validées + experts absents) → ArbiterVerdict vali
    ▼
 événement terminal persisté → SSE fermé
 ```
+
+## Streaming natif MiniMax-M3 (carte bonus Palier 4)
+
+- **Enveloppe de réponse finale** : `<LIVE_RESPONSE>…</LIVE_RESPONSE><FINAL_JSON>{…}</FINAL_JSON>`.
+  Le texte live est un résumé de conclusion en français, bref, lisible, sans
+  JSON, borné à `STREAM_MAX_DRAFT_CHARS` (4000) ; le JSON final est
+  `AgentOutput` (experts) ou `ArbiterVerdict` (Arbitre). Aucun texte hors de
+  ces deux balises (cf. prompts recopiés ci-dessus, qui terminent par
+  `_EXPERT_ENVELOPE` / `_ARBITER_ENVELOPE` dans `backend/app/experts.py`).
+- **Diffusion en direct** : 4 événements persistés `agent.response.started`,
+  `agent.response.delta` (charges de `STREAM_DELTA_BATCH_CHARS` caractères,
+  32 par défaut), `agent.response.completed` (JSON validé Pydantic) et
+  `agent.response.failed`. Séquence strictement croissante par rôle ; un seul
+  `started` par rôle et par analyse ; le JSON final n'apparaît jamais dans un
+  delta. `completed` est diffusé avant `expert.completed`/`arbiter.completed`.
+- **Implémentation** : `backend/app/streaming.py` (`StreamCollector`,
+  `EnvelopeParser`, `ToolCallAssembler`, `normalize_delta`). Le contenu
+  MiniMax-M3 peut être cumulatif : `normalize_delta` déduplique les fragments
+  qui se chevauchent. Le dernier chunk `choices=[]` avec `usage` est conservé ;
+  l'usage est agrégé exactement une fois.
+- **Erreurs de protocole** : marqueurs inversés, double section live, JSON final
+  manquant, id/nom d'outil invalide → `protocol_error`, la boucle s'arrête sans
+  exécuter d'outil. Réponse d'outil sans aucune balise : pas une erreur
+  (enveloppe simplement non demandée). Un round live + `tool_calls` mélangés =
+  `hybrid_live_and_tool_calls`.
+- **Garde-fou de temps des deltas** : `_flush_time` force une diffusion après
+  0,1 s même si le paquet n'est pas plein (réactivité du front, miniMax en
+  temps réel).
 
 ## Garde-fous Palier 4
 
@@ -228,7 +276,12 @@ une base neuve.
 `analysis.created`, `expert.started`, `tool.started`, `tool.completed`,
 `tool.failed`, `expert.completed`, `expert.failed`, `expert.timeout`,
 `arbiter.started`, `arbiter.completed`, `arbiter.failed`,
-`analysis.completed`, `analysis.degraded`, `analysis.failed`,
-`analysis.interrupted` (au redémarrage). Chaque événement est écrit en base
-avant d'être diffusé (identifiant entier croissant) ; reprise via
-`Last-Event-ID` ou `?after=<id>`.
+`agent.response.started`, `agent.response.delta`, `agent.response.completed`,
+`agent.response.failed`, `analysis.completed`, `analysis.degraded`,
+`analysis.failed`, `analysis.interrupted` (au redémarrage). Chaque événement
+est écrit en base avant d'être diffusé (identifiant entier croissant) ; reprise
+via `Last-Event-ID` ou `?after=<id>` (le maximum des deux est pris en compte) ;
+polling toutes les `SSE_POLL_INTERVAL_MS` ms avec keep-alive toutes les
+`SSE_KEEPALIVE_SECONDS` s. Le terminal (`analysis.completed`/`degraded`/`failed`)
+et son événement sont committés atomiquement par `db.finish_analysis` : un client
+ne peut jamais voir un statut terminal sans son événement terminal.

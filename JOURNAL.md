@@ -1,5 +1,37 @@
 # Journal
 
+## 2026-08-20 — Palier 4 bonus : streaming natif MiniMax-M3 + SSE temps réel
+
+- **Streaming** : nouveau module `backend/app/streaming.py` — `StreamCollector`,
+  `EnvelopeParser` (automate 6 états), `ToolCallAssembler`, `normalize_delta`
+  (contenu MiniMax potentiellement cumulatif dédupliqué), `stream_chat_completion`
+  (stream=True, include_usage, thinking désactivé via extra_body).
+- **Enveloppe** : `<LIVE_RESPONSE>…</LIVE_RESPONSE><FINAL_JSON>{…}</FINAL_JSON>`
+  ajoutée aux prompts experts/Arbitre (`_EXPERT_ENVELOPE`/`_ARBITER_ENVELOPE`,
+  recopiés dans AGENTS.md). Réponse d'outil sans balise = pas une erreur ;
+  marqueurs inversés / double live / JSON final manquant / id-nom d'outil invalide
+  / live+tool_calls mélangés = `protocol_error` sans exécution d'outil.
+- **Événements live persistés** : `agent.response.started`, `agent.response.delta`
+  (paquets bornés `STREAM_DELTA_BATCH_CHARS`, flush temporel 0,1 s),
+  `agent.response.completed`, `agent.response.failed` ; séquence croissante par
+  rôle ; JSON final jamais dans un delta ; `completed` avant l'événement d'étape.
+- **SSE** : polling `SSE_POLL_INTERVAL_MS=100` (au lieu d'un sleep fixe),
+  keep-alive `SSE_KEEPALIVE_SECONDS=10`, reprise `max(Last-Event-ID, ?after)`.
+- **Atomique** : `db.finish_analysis` committe statut + usage + verdict +
+  événement terminal en une transaction (supprime la course où un client voyait
+  un statut terminal sans événement terminal).
+- **/tools list** : `POST /api/tool-commands` `"/tools"`/`"/tools list"` → 200 avec
+  catalogue complet (`ToolCommandResponse` étendu : action, message, tool_name,
+  enabled, tools) ; enable/disable gardent tool_name/enabled non nuls (compat front).
+- **Réglages** : `sse_poll_interval_ms`, `sse_keepalive_seconds`,
+  `stream_max_draft_chars`, `stream_delta_batch_chars` (bornés) dans config.py et
+  .env.example.
+- **Tests** : +40 tests streaming (collecteur, parser, assembleur, boucle agent,
+  persistance des événements, analyse complète en streaming) → 111 verts, stables
+  sur 3 exécutions ; `compileall` et `git diff --check` propres.
+- Poussé sur origin/yo. PR proposée yo → dev (titre : « feat(p4): stream MiniMax
+  responses through persistent SSE »).
+
 ## 2026-08-19 — Palier 4 : persistance SQLite et orchestration complète
 
 - **Git** : sync préalable (yo = origin/dev = bb2d776), travail exclusivement sur `backend/**`, `.env.example`, SPEC.md, OUTILS.md, AGENTS.md, architecture.mmd, JOURNAL.md (+ `.gitignore` pour `data/*.db`).

@@ -174,6 +174,20 @@ répondu. `usage` accumule jetons et latence par rôle puis est agrégé pour
 l'analyse ; `estimated_cost_usd` reste `null` si les statistiques du
 fournisseur sont absentes ou si aucun tarif n'est configuré.
 
+### Streaming des réponses (carte bonus Palier 4)
+
+En Palier 4 la sortie finale des experts et de l'Arbitre est streamée via
+l'enveloppe `<LIVE_RESPONSE>…</LIVE_RESPONSE><FINAL_JSON>{…}</FINAL_JSON>`
+(`backend/app/streaming.py`). Le texte live (conclusion en français, bref,
+sans JSON) est diffusé par paquets `agent.response.delta` (bornés par
+`STREAM_DELTA_BATCH_CHARS`, flush temporel 0,1 s) et plafonné par
+`STREAM_MAX_DRAFT_CHARS` ; le JSON final (conforme à `AgentOutput`/`ArbiterVerdict`)
+n'est extrait qu'à la clôture du flux et n'apparaît jamais dans un delta. Un
+round d'outil sans balise n'est pas une erreur ; une réponse qui viole le
+protocole d'enveloppe est rejetée en `protocol_error` sans exécuter d'outil.
+Les événements `agent.response.started|delta|completed|failed` sont persistés
+avant diffusion, avec une séquence strictement croissante par rôle.
+
 ## Matrice d'accès
 
 | Composant | Métriques | Indices sécurité | Estimation coût | Appel LLM |
