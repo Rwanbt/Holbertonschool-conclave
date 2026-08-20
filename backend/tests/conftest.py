@@ -159,6 +159,7 @@ class FakeClient:
         }
         self._repairs = list(repairs or [])
         self.created_messages: list[list[dict[str, Any]]] = []
+        self.created_kwargs: list[dict[str, Any]] = []
 
     async def __aenter__(self):
         return self
@@ -206,6 +207,7 @@ class _FakeCompletions:
 
     async def create(self, **kwargs):
         messages = kwargs.get("messages", [])
+        self._owner.created_kwargs.append(kwargs)
         try:
             response = self._owner.next_response(messages)
         except _Hang:

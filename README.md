@@ -1,11 +1,17 @@
-# CONCLAVE — Palier 4 « Le Contrat Conclave »
+# CONCLAVE — Palier 4 « Le Contrat Conclave » + R1 (streaming réel, outils indépendants)
 
-Le front soumet un **document** au backend (`POST /api/analyses`) ; trois experts
-(**Avocat**, **Procureur**, **Comptable**) l'analysent en parallèle, puis un
-**Arbitre** rend un verdict. L'interface parcourt six étapes — **Soumettre,
-Convoquer, Observer, Comparer, Arbitrer, Décider** — et survit à un
-rechargement de page : le snapshot vient de `GET /api/analyses/{id}` et le flux
-SSE est rejoué depuis zéro (`?after=0`) pour reconstruire brouillons et traces.
+Dès l'ouverture, le front affiche le stepper et les **trois switches d'outils**
+(indépendants, persistants, chargés automatiquement). Le document est ensuite
+soumis (`POST /api/analyses`, statut `queued`, configuration des outils figée
+dans la même requête) ; trois experts (**Avocat**, **Procureur**, **Comptable**)
+l'analysent en parallèle une fois le flux SSE ouvert (`POST …/start`, appelé par
+le front après `EventSource.onopen`, jamais avant), puis un **Arbitre** rend un
+verdict. L'interface parcourt six étapes — **Soumettre, Convoquer, Observer,
+Comparer, Arbitrer, Décider** — pilotées par les événements SSE observés (pas
+par le seul statut du snapshot), et survit à un rechargement de page : le
+snapshot et l'historique JSON paginé (`GET …/events/history`) sont chargés en
+parallèle, et le flux SSE ne rouvre jamais depuis zéro ni pour une analyse déjà
+terminale.
 
 - **Front** : React + TypeScript + Vite dans `frontend/` (branche `erwan`).
 - **Back** : FastAPI + Python dans `backend/` (branche `yo`, travail de Yohan).
@@ -115,27 +121,54 @@ les `agent.response.*` — la preuve que les deltas arrivent avant la clôture,
 jamais rejoués après coup. Le panneau n’affiche ni le JSON final brut, ni le
 reasoning du modèle.
 
+### Cycle de vie d'une analyse : queued → running → terminal
+
+`POST /api/analyses` crée l'analyse en `queued` et fige, dans la même
+requête, une copie immuable du registre d'outils (`analysis_tool_states`) :
+une modification ultérieure du registre global (via les switches, pour la
+*prochaine* analyse) n'affecte jamais celle-ci. Le job ne démarre pas à la
+création : le front affiche l'analyse `queued`, ouvre `EventSource(?after=0)`,
+attend `onopen`, puis appelle `POST /api/analyses/{id}/start` — idempotent
+(compare-and-set SQL `queued → running`, 202 la première fois, 200
+`already_started` ensuite), qui insère `analysis.started` avant tout
+`expert.started`. Un outil désactivé dans la configuration figée n'est même
+pas proposé à MiniMax (`tools` filtré, ou omis si aucun outil actif).
+
 ### Persistance et rechargement (F5)
 
 L'UUID de l'analyse est stocké dans `localStorage` (clé
 `conclave.currentAnalysisId.v1`) et dans l'URL (`?uuid=`). Au montage, le front
-charge d'abord le snapshot (`GET /api/analyses/{id}`), puis ouvre la connexion
-SSE avec **`after=0`** pour rejouer tous les événements de SQLite et reconstruire
-brouillons et traces que le state React a perdus. L'idempotence par `event.id`
-absorbe les rejeux, et le même `EventSource` utilise sa reconnexion native avec
-`Last-Event-ID` en cas de coupure. Le dernier id reçu reste écrit en
-localStorage à titre de diagnostic, jamais pour sauter un historique. Le POST
-de création n’est jamais relancé au rechargement ; une analyse introuvable
-(404) nettoie la référence locale.
+charge en parallèle le snapshot (`GET /api/analyses/{id}`) et l'historique JSON
+paginé (`GET …/events/history?after=0&limit=500`, paginé tant que `has_more`)
+pour reconstruire brouillons et traces sans rejouer `after=0` sur le flux SSE
+vivant. Le flux SSE **n'est jamais rouvert** pour une analyse déjà terminale
+(le front affiche l'état final directement, ce n'est pas une animation à
+rejouer) ; pour une analyse `queued`/`running`, il reprend depuis le plus grand
+identifiant hydraté, et `POST …/start` n'est rappelé qu'une fois après
+`onopen` (idempotent côté serveur, donc une reconnexion native ne le redéclenche
+jamais). L'idempotence par `event.id` absorbe les rejeux, et le même
+`EventSource` utilise sa reconnexion native avec `Last-Event-ID` en cas de
+coupure. Le POST de création n'est jamais relancé au rechargement ; une analyse
+introuvable (404) nettoie la référence locale.
 
-**Panneau outils** : le panneau charge le catalogue au montage et expose une
-barre de commande complète : un champ « Commande outils », un bouton
-« Exécuter » et une aide copiable. La grammaire supportée est exactement
-`/tools`, `/tools list`, `/tools enable <nom>` et `/tools disable <nom>` — la
-chaîne est envoyée telle quelle au backend via `POST /api/tool-commands`, qui
-renvoie toujours le catalogue complet dans `response.tools` ; après toute
-réponse 200 la liste locale est remplacée par ce catalogue, et une erreur 422
-conserve l’état précédent (persisté dans SQLite `tool_states`).
+### Panneau outils — switches indépendants dès la première page
+
+Les trois switches (**Mesurer le document**, **Rechercher les indicateurs de
+sécurité**, **Estimer le coût de l'analyse**) sont visibles et pilotables
+avant même de coller un document, sans manipulation initiale : le catalogue
+(`GET /api/tools`) est chargé automatiquement, et chaque switch
+(`role="switch"`, `aria-checked`, état textuel Activé/Désactivé/Modification…)
+envoie directement `POST /api/tool-commands` — un seul changement à la fois,
+les autres restent verrouillés pendant la mutation, et une erreur conserve
+l'état précédent sans jamais être écrasée par une réponse réseau obsolète
+(compteur de requêtes monotone). `estimate_current_analysis_cost` affiche sa
+dépendance à `measure_current_document` (« Nécessite Mesurer le document ») :
+activé seul, il renvoie proprement `missing_prerequisite` sans jamais mesurer
+implicitement. Pendant une analyse `queued`/`running`, le panneau bascule en
+lecture seule sur la configuration **figée** de cette analyse ; après
+« Nouvelle analyse », il recharge le registre global pour la suivante. Une
+section « Commande avancée » repliable garde l'accès à la grammaire brute
+(`/tools`, `/tools list`, `/tools enable <nom>`, `/tools disable <nom>`).
 
 ## Comportements hors du contrat
 
@@ -147,7 +180,7 @@ conforme à `Happy_path.md` doit parcourir les six étapes et finir sur
 `go_with_conditions` (à condition que les tarifs MiniMax soient configurés pour
 l'estimation du Comptable).
 
-## Procédure de test du streaming
+## Procédure de test
 
 ```bash
 cd frontend
@@ -160,24 +193,41 @@ npm run build
 Depuis la racine :
 
 ```bash
-.venv/bin/python -m pytest backend/tests -q   # suite backend de Yohan
+python -m pytest backend/tests -q   # 132 tests + 1 smoke MiniMax réel (skip sans clé)
 git status --short
 git diff --check
 ```
 
-Test manuel avec le backend et MiniMax réels :
+Le workflow CI (`.github/workflows/ci.yml`) exécute ces mêmes commandes sur
+chaque PR et push vers `main`/`dev`, sans clé MiniMax (le smoke test réel
+`backend/tests/test_minimax_smoke.py` s'auto-`skip` sans `MINIMAX_API_KEY`).
+
+### Démonstration en six étapes
+
+1. Ouvrir l'application : le stepper et les trois switches sont immédiatement
+   visibles, avant tout document.
+2. Désactiver l'outil Sécurité, conserver Mesure et Coût activés, puis
+   recharger la page : les états restent identiques (persistés en SQLite).
+3. Coller un document inédit et cliquer « Convoquer le Conclave » : l'étape
+   Convoquer apparaît, puis Observer démarre après l'ouverture réelle du SSE.
+4. Observer les tours agentiques et outils en direct dans le panneau de
+   démonstration ; l'outil Sécurité n'est jamais appelé ni même envoyé au
+   modèle (configuration figée de l'analyse).
+5. Voir les synthèses publiques grandir par deltas, puis recharger la page
+   pendant l'arbitrage : le flux reprend depuis le dernier identifiant hydraté,
+   sans doublon ni ré-déclenchement du job.
+6. Obtenir le verdict final et montrer la timeline, les tokens, le coût, la
+   latence et la configuration figée des outils de cette analyse.
+
+Test manuel complémentaire avec le backend et MiniMax réels :
 
 1. Ouvrir l'onglet Réseau du navigateur sur la connexion SSE
    (`/api/analyses/{id}/events`).
-2. Lancer une analyse avec un texte inventé.
-3. Voir les appels d'outils (`tool.started` / `tool.completed`) apparaître avant
+2. Voir les appels d'outils (`tool.started` / `tool.completed`) apparaître avant
    la réponse du rôle.
-4. Voir au moins deux `agent.response.delta` pour un même rôle avant
+3. Voir au moins deux `agent.response.delta` pour un même rôle avant
    `agent.response.completed`.
-5. Voir le texte de la carte grandir avant la sortie complète.
-6. Recharger (F5) pendant un flux : le snapshot puis le rejeu depuis zéro
-   reconstruisent le brouillon interrompu ; le POST de création n'est pas répété.
-7. Vérifier `/tools list`, `/tools disable <nom>`, F5, puis `/tools enable <nom>`.
+4. Vérifier `/tools list`, `/tools disable <nom>`, F5, puis `/tools enable <nom>`.
 
 Mesures à relever : temps avant le premier delta, nombre de deltas par rôle et
 durée totale.

@@ -116,10 +116,18 @@ class AgentResponse(BaseModel):
 # Palier 4 — analyse persistante, experts, arbitre, outils, événements
 # ---------------------------------------------------------------------------
 
-AnalysisStatus = Literal["running", "completed", "degraded", "failed", "interrupted"]
+AnalysisStatus = Literal[
+    "queued", "running", "completed", "degraded", "failed", "interrupted"
+]
 ExpertStatus = Literal["pending", "running", "completed", "error", "timeout"]
 ExpertRole = Literal["avocat", "procureur", "comptable"]
 ResponseRole = Literal["avocat", "procureur", "comptable", "arbitre"]
+
+ToolName = Literal[
+    "measure_current_document",
+    "find_security_indicators_in_current_document",
+    "estimate_current_analysis_cost",
+]
 
 
 class AnalysisCreateRequest(BaseModel):
@@ -133,10 +141,34 @@ class AnalysisCreateRequest(BaseModel):
     _document_not_blank = field_validator("document")(_non_blank)
 
 
+class ToolConfiguration(BaseModel):
+    """Configuration des outils figée pour une analyse donnée, au moment de
+    sa création. Immuable ensuite : une modification du registre global
+    (`/api/tool-commands`) n'affecte jamais une analyse déjà créée."""
+
+    enabled_tools: list[ToolName] = Field(
+        ..., description="Outils activés au moment de la création de l'analyse."
+    )
+    disabled_tools: list[ToolName] = Field(
+        ..., description="Outils désactivés au moment de la création de l'analyse."
+    )
+
+
 class AnalysisCreated(BaseModel):
     analysis_id: str = Field(..., description="Identifiant unique UUID de l'analyse.")
-    status: AnalysisStatus = Field(..., description="Statut initial de l'analyse.")
+    status: AnalysisStatus = Field(..., description="Statut initial de l'analyse (queued).")
     created_at: str = Field(..., description="Date de création ISO-8601 UTC.")
+    tool_configuration: ToolConfiguration = Field(
+        ..., description="Configuration des outils figée pour cette analyse."
+    )
+
+
+class StartAnalysisResponse(BaseModel):
+    analysis_id: str = Field(..., description="Identifiant de l'analyse.")
+    status: AnalysisStatus = Field(..., description="Statut après tentative de démarrage.")
+    already_started: bool = Field(
+        ..., description="True si l'analyse était déjà running ou terminale."
+    )
 
 
 class Finding(BaseModel):
@@ -213,13 +245,9 @@ class AnalysisSnapshot(BaseModel):
     guardrails: dict[str, Any] = Field(
         ..., description="Limites appliquées (timeouts, rounds, statuts autorisés)."
     )
-
-
-ToolName = Literal[
-    "measure_current_document",
-    "find_security_indicators_in_current_document",
-    "estimate_current_analysis_cost",
-]
+    tool_configuration: ToolConfiguration = Field(
+        ..., description="Configuration des outils figée pour cette analyse."
+    )
 
 
 class ToolState(BaseModel):
@@ -295,3 +323,24 @@ class ToolEventData(BaseModel):
     )
     duration_ms: int = Field(..., ge=0, description="Durée d'exécution mesurée.")
     error_code: str | None = Field(None, description="Code d'erreur court, ou null.")
+
+
+class AnalysisEventEnvelope(BaseModel):
+    """Un événement rejoué tel qu'il apparaît dans l'historique JSON paginé."""
+
+    id: int = Field(..., ge=1, description="Identifiant strictement croissant.")
+    event_type: str = Field(..., min_length=1, description="Type d'événement.")
+    payload: dict[str, Any] = Field(..., description="Charge utile bornée, sans document.")
+    created_at: str = Field(..., description="Date ISO-8601 UTC de l'événement.")
+
+
+class EventsHistoryResponse(BaseModel):
+    events: list[AnalysisEventEnvelope] = Field(
+        ..., description="Événements strictement ordonnés par id, après `after`."
+    )
+    last_event_id: int = Field(
+        ..., ge=0, description="Plus grand id renvoyé (0 si `events` est vide)."
+    )
+    has_more: bool = Field(
+        ..., description="True si `limit` a tronqué le résultat : paginer avec `after`."
+    )

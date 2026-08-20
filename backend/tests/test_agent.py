@@ -74,8 +74,10 @@ class _FakeCompletion:
 class _FakeCompletions:
     def __init__(self, responses):
         self._responses = list(responses)
+        self.created_kwargs: list[dict] = []
 
     async def create(self, **kwargs):
+        self.created_kwargs.append(kwargs)
         if not self._responses:
             raise AssertionError("agent loop called the provider too many times")
         return self._responses.pop(0)
@@ -116,6 +118,37 @@ class TestRegistry:
             # Aucun paramètre texte libre : le document ne peut pas transiter
             # par les arguments d'outil.
             assert schema["function"]["parameters"]["properties"] == {}
+
+    def test_allowed_tools_filters_schemas(self) -> None:
+        allowed = frozenset({"measure_current_document"})
+        schemas = agent.registry_tool_schemas(allowed)
+        names = {schema["function"]["name"] for schema in schemas}
+        assert names == allowed
+
+    def test_empty_allowed_tools_yields_empty_schema_list(self) -> None:
+        assert agent.registry_tool_schemas(frozenset()) == []
+
+    def test_zero_tools_omits_tools_kwarg_without_provider_error(self, monkeypatch) -> None:
+        client = _FakeClient(
+            [_FakeCompletion([_FakeChoice(_FakeMessage(content="Je ne peux pas vérifier."))])]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda s: client)
+
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse le document."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=3,
+                allowed_tools=frozenset(),
+            )
+        )
+        assert result.answer == "Je ne peux pas vérifier."
+        assert "tools" not in client.chat.completions.created_kwargs[0]
+        assert "tool_choice" not in client.chat.completions.created_kwargs[0]
 
 
 class TestAgentLoop:
@@ -208,7 +241,10 @@ class TestAgentLoop:
         assert "secret" in entry.output_summary["categories"]
         assert response.answer == "Un indice secret trouvé."
 
-    def test_cost_then_answer(self, monkeypatch) -> None:
+    def test_cost_without_prior_measure_is_missing_prerequisite(self, monkeypatch) -> None:
+        # R1 : plus de mesure implicite — estimer le coût sans avoir mesuré
+        # le document échoue proprement (missing_prerequisite) au lieu
+        # d'inventer une mesure silencieuse.
         response = _run(
             monkeypatch,
             [
@@ -227,11 +263,53 @@ class TestAgentLoop:
                     ]
                 ),
                 _FakeCompletion(
-                    [_FakeChoice(_FakeMessage(content="Le coût estimé est calculé."))]
+                    [_FakeChoice(_FakeMessage(content="Je ne peux pas vérifier."))]
                 ),
             ],
         )
         entry = response.trace[0]
+        assert entry.status == "error"
+        assert entry.error_code == "missing_prerequisite"
+
+    def test_measure_then_cost_succeeds(self, monkeypatch) -> None:
+        response = _run(
+            monkeypatch,
+            [
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                content=None,
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_1", "measure_current_document", "{}"
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                content=None,
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_2", "estimate_current_analysis_cost", "{}"
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(content="Le coût estimé est calculé."))]
+                ),
+            ],
+            settings=_settings(minimax_max_tool_rounds=3),
+        )
+        entry = response.trace[1]
         assert entry.status == "success"
         assert entry.output_summary["currency"] == "USD"
         assert entry.output_summary["estimated_cost_usd"] >= 0.0

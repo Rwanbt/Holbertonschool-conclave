@@ -56,14 +56,25 @@ function hasEventType(
   return events.some((event) => types.includes(event.type))
 }
 
+const TERMINAL_EVENT_TYPES: readonly AnalysisEventType[] = [
+  'analysis.completed',
+  'analysis.degraded',
+  'analysis.failed',
+  'analysis.interrupted',
+]
+
+/**
+ * L'étape active suit les ÉVÉNEMENTS observés, jamais le statut du snapshot
+ * seul : un snapshot terminal reçu avant que son événement terminal n'ait
+ * été traité (course snapshot vs SSE) ne doit pas faire sauter directement
+ * à l'étape « Décider ». Le snapshot ne sert que de repli quand aucun
+ * événement n'est encore arrivé (p.ex. tout premier rendu après création).
+ */
 export function calculateActiveStep(
   snapshot: AnalysisSnapshot | null,
   events: readonly AnalysisEvent[],
 ): number {
-  if (snapshot === null) {
-    return 0
-  }
-  if (isTerminalAnalysisStatus(snapshot.status)) {
+  if (hasEventType(events, TERMINAL_EVENT_TYPES)) {
     return FLOW_STEPS.length - 1
   }
   if (hasEventType(events, ['arbiter.started', 'arbiter.completed', 'arbiter.failed'])) {
@@ -72,8 +83,11 @@ export function calculateActiveStep(
   if (hasEventType(events, ['expert.completed', 'expert.failed', 'expert.timeout'])) {
     return FLOW_STEPS.length - 3
   }
-  if (hasEventType(events, ['expert.started'])) {
+  if (hasEventType(events, ['expert.started', 'analysis.started'])) {
     return FLOW_STEPS.length - 4
+  }
+  if (snapshot === null) {
+    return 0
   }
   return 1
 }

@@ -126,6 +126,8 @@ function connectionLabel(connection: AnalysisConnection): string {
       return 'Rechargement du snapshot…'
     case 'live':
       return 'Flux connecté'
+    case 'closed':
+      return 'Analyse terminale : flux fermé'
     case 'reconnecting':
       return 'Flux interrompu, reconnexion…'
     case 'error':

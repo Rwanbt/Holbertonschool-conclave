@@ -7,15 +7,19 @@ import type {
   AgentResponseStartedPayload,
   AnalysisCreated,
   AnalysisEvent,
+  AnalysisEventEnvelope,
   AnalysisEventType,
   AnalysisSnapshot,
   ArbiterVerdict,
+  EventsHistoryResponse,
   ExecutionUsage,
   ExpertRun,
   GuardrailInfo,
   Priority,
+  StartAnalysisResponse,
   ToolCatalogResponse,
   ToolCommandResponse,
+  ToolConfiguration,
   ToolName,
   ToolState,
   ToolStatus,
@@ -167,7 +171,10 @@ function readUsage(value: unknown): ExecutionUsage {
     value.total_latency_ms,
     'total_latency_ms',
   )
-  const llm_rounds = readPositiveInteger(value.llm_rounds, 'llm_rounds')
+  // R1 : une analyse queued/toute fraîche a llm_rounds=0 (backend: ge=0) —
+  // ce n'est pas un entier strictement positif, donc readPositiveInteger
+  // rejetait à tort un snapshot par ailleurs valide.
+  const llm_rounds = readNonNegativeInteger(value.llm_rounds, 'llm_rounds')
 
   return {
     input_tokens,
@@ -224,6 +231,7 @@ function readNullableNonNegativeNumber(
 // ---------------------------------------------------------------------------
 
 const ANALYSIS_STATUSES: readonly string[] = [
+  'queued',
   'running',
   'completed',
   'degraded',
@@ -268,6 +276,9 @@ const MAX_LIVE_DELTA_CHARS = 512
 
 export const SSE_EVENT_TYPES: readonly AnalysisEventType[] = [
   'analysis.created',
+  'analysis.started',
+  'agent.round.started',
+  'agent.round.completed',
   'expert.started',
   'tool.started',
   'tool.completed',
@@ -354,6 +365,27 @@ function readNullableVerdict(value: unknown): ArbiterVerdict | null {
   return parseArbiterVerdict(value)
 }
 
+export function parseToolConfiguration(value: unknown): ToolConfiguration {
+  const record = requireRecord(value)
+  const enabled_tools = readToolNameList(record.enabled_tools, 'enabled_tools')
+  const disabled_tools = readToolNameList(record.disabled_tools, 'disabled_tools')
+  return { enabled_tools, disabled_tools }
+}
+
+function readToolNameList(value: unknown, key: string): ToolName[] {
+  if (!Array.isArray(value)) {
+    throw new ResponseValidationError(`le champ "${key}" n'est pas un tableau.`)
+  }
+  return value.map((item, index) => {
+    if (typeof item !== 'string' || !TOOL_NAMES.includes(item)) {
+      throw new ResponseValidationError(
+        `le champ "${key}" contient un nom d'outil inconnu (index ${index}).`,
+      )
+    }
+    return item as ToolName
+  })
+}
+
 export function parseAnalysisCreated(body: unknown): AnalysisCreated {
   const record = requireRecord(body)
   const analysis_id = readString(record, 'analysis_id')
@@ -363,7 +395,41 @@ export function parseAnalysisCreated(body: unknown): AnalysisCreated {
     ANALYSIS_STATUSES,
   )
   const created_at = readString(record, 'created_at')
-  return { analysis_id, status, created_at }
+  const tool_configuration = parseToolConfiguration(record.tool_configuration)
+  return { analysis_id, status, created_at, tool_configuration }
+}
+
+export function parseStartAnalysisResponse(body: unknown): StartAnalysisResponse {
+  const record = requireRecord(body)
+  const analysis_id = readString(record, 'analysis_id')
+  const status = readEnum<StartAnalysisResponse['status']>(
+    record,
+    'status',
+    ANALYSIS_STATUSES,
+  )
+  const already_started = readBoolean(record, 'already_started')
+  return { analysis_id, status, already_started }
+}
+
+export function parseEventsHistoryResponse(body: unknown): EventsHistoryResponse {
+  const record = requireRecord(body)
+  const eventsValue = record.events
+  if (!Array.isArray(eventsValue)) {
+    throw new ResponseValidationError('le champ "events" n\'est pas un tableau.')
+  }
+  const events: AnalysisEventEnvelope[] = eventsValue.map(parseAnalysisEventEnvelope)
+  const last_event_id = readNonNegativeInteger(record.last_event_id, 'last_event_id')
+  const has_more = readBoolean(record, 'has_more')
+  return { events, last_event_id, has_more }
+}
+
+function parseAnalysisEventEnvelope(value: unknown): AnalysisEventEnvelope {
+  const record = requireRecord(value)
+  const id = readPositiveInteger(record.id, 'id')
+  const event_type = readNonEmptyString(record, 'event_type')
+  const payload = requireRecord(record.payload)
+  const created_at = readString(record, 'created_at')
+  return { id, event_type, payload, created_at }
 }
 
 export function parseAnalysisSnapshot(body: unknown): AnalysisSnapshot {
@@ -385,6 +451,7 @@ export function parseAnalysisSnapshot(body: unknown): AnalysisSnapshot {
   const verdict = readNullableVerdict(record.verdict)
   const usage = readUsage(record.usage)
   const guardrails = parseGuardrails(record.guardrails)
+  const tool_configuration = parseToolConfiguration(record.tool_configuration)
   return {
     analysis_id,
     document,
@@ -399,6 +466,7 @@ export function parseAnalysisSnapshot(body: unknown): AnalysisSnapshot {
     verdict,
     usage,
     guardrails,
+    tool_configuration,
   }
 }
 

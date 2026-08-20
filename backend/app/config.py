@@ -93,10 +93,19 @@ class Settings(BaseSettings):
         description="Taille maximale du texte live diffusé (brouillon) par rôle et analyse.",
     )
     stream_delta_batch_chars: int = Field(
-        32,
+        16,
         ge=4,
         le=512,
         description="Taille cible d'un événement agent.response.delta, en caractères.",
+    )
+    stream_flush_interval_ms: int = Field(
+        50,
+        ge=10,
+        le=2000,
+        description=(
+            "Délai maximal avant un flush partiel du brouillon live accumulé, "
+            "pour ne jamais retenir un petit fragment reçu isolément."
+        ),
     )
 
     @field_validator("disabled_tools")
