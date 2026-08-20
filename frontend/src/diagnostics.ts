@@ -59,6 +59,10 @@ const EXPLANATIONS: Record<string, Explanation> = {
     what: "Les experts ont abouti, mais l'arbitre n'a pas pu rendre de verdict valide.",
     action: 'Les sorties des experts restent consultables ci-dessus.',
   },
+  start_timeout: {
+    what: "L’analyse est restée en attente sans recevoir l’ordre de démarrage.",
+    action: "Relancez une nouvelle analyse après avoir vérifié la connexion au backend.",
+  },
   tool_disabled: {
     what: "L'outil demandé était désactivé dans la configuration figée de cette analyse.",
     action: 'Activez-le depuis le panneau des outils avant de lancer la prochaine analyse.',

@@ -21,10 +21,17 @@ fidèles au SDK) ; les fonctions métier des outils restent le vrai code.
 import asyncio
 import json
 
+import pytest
+
 from backend.app import agent, db, experts
 from backend.app.agent import AgentSession
 from backend.app.config import Settings
-from backend.app.streaming import EnvelopeParser, StreamCollector, normalize_delta
+from backend.app.streaming import (
+    EnvelopeParser,
+    LiveSinkError,
+    StreamCollector,
+    normalize_delta,
+)
 
 from .conftest import (
     FakeClient,
@@ -287,6 +294,20 @@ class TestAgentLoopStreaming:
             if kind == "agent.response.delta":
                 assert "FINAL_JSON" not in fields["delta"]
 
+    def test_live_sink_failure_is_not_misreported_as_provider_failure(self) -> None:
+        async def failing_sink(_kind: str, _fields: dict) -> None:
+            raise RuntimeError("sqlite unavailable")
+
+        collector = StreamCollector(
+            _settings(), live_sink=failing_sink, response_role="avocat"
+        )
+        with pytest.raises(LiveSinkError):
+            _run_async(
+                collector.feed(
+                    FakeStreamChunk(content="<LIVE_RESPONSE>début")
+                )
+            )
+
     def test_protocol_error_stops_cleanly_without_answer_after_failed_repair(
         self, monkeypatch
     ) -> None:
@@ -337,14 +358,18 @@ class TestAgentLoopStreaming:
         # la boucle réussit normalement et le live n'est plus vide.
         payload = agent_output_json("avocat")
         stream = FakeStream(
-            [FakeStreamChunk(content="<FINAL_JSON>\n" + payload + "\n</FINAL_JSON>")]
+            [
+                FakeStreamChunk(content="<FINAL_JSON>\n" + payload + "\n</FINAL_JSON>"),
+                FakeStreamChunk(usage=FakeUsage(7, 3)),
+            ]
         )
         repair_stream = FakeStream(
             [
                 FakeStreamChunk(
                     content="<LIVE_RESPONSE>Conclusion corrigée</LIVE_RESPONSE>"
                     "<FINAL_JSON>" + payload + "</FINAL_JSON>"
-                )
+                ),
+                FakeStreamChunk(usage=FakeUsage(11, 5)),
             ]
         )
         result, events, client = self._patched_loop(
@@ -353,8 +378,52 @@ class TestAgentLoopStreaming:
         assert result.stop_reason is None
         assert json.loads(result.answer)["role"] == "avocat"
         assert result.live_text == "Conclusion corrigée"
+        # La tentative invalide a tout de même consommé des jetons : son
+        # usage s'ajoute à celui de la réparation, il ne disparaît pas.
+        assert result.usage.input_tokens == 18
+        assert result.usage.output_tokens == 8
         assert any(kind == "agent.response.delta" for kind, _ in events)
         assert client._repairs == []
+
+    def test_streaming_with_all_tools_disabled_omits_tool_parameters(
+        self, monkeypatch
+    ) -> None:
+        payload = agent_output_json("avocat")
+        client = FakeClient(
+            {
+                "avocat": FakeStream(
+                    [
+                        FakeStreamChunk(
+                            content="<LIVE_RESPONSE>Conclusion</LIVE_RESPONSE>"
+                            "<FINAL_JSON>" + payload + "</FINAL_JSON>"
+                        )
+                    ]
+                )
+            }
+        )
+        monkeypatch.setattr(agent, "build_client", lambda _settings: client)
+
+        result = _run_async(
+            agent.run_agent_loop(
+                [
+                    {
+                        "role": "system",
+                        "content": "Tu es l'expert AVOCAT de l'analyse documentaire CONCLAVE.",
+                    },
+                    {"role": "user", "content": "document"},
+                ],
+                AgentSession(document="document"),
+                _settings(),
+                max_rounds=2,
+                stream_final_envelope=True,
+                allowed_tools=frozenset(),
+                agent_role="avocat",
+            )
+        )
+
+        assert result.answer is not None
+        assert "tools" not in client.created_kwargs[0]
+        assert "tool_choice" not in client.created_kwargs[0]
 
     def test_final_json_only_round_without_live_fails_after_failed_repair(
         self, monkeypatch

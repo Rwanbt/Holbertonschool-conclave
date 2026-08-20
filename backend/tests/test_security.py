@@ -256,6 +256,19 @@ class TestAbuseGuards:
         assert response.status_code == 413
         assert "limite" in response.json()["detail"].lower()
 
+    def test_chunked_oversized_body_is_also_refused(self, client) -> None:
+        def chunks():
+            yield b"x" * 600_000
+            yield b"y" * 600_000
+
+        response = client.post(
+            "/api/analyses",
+            content=chunks(),
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 413
+        assert "limite" in response.json()["detail"].lower()
+
     def test_repeated_submissions_are_capped_with_an_actionable_message(
         self, client
     ) -> None:

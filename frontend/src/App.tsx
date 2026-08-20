@@ -78,14 +78,12 @@ export default function App() {
   const isNew = analysisId === null
   const snapshot = controller.snapshot
 
-  const catalogReady = toolCatalog.status === 'ready' || toolCatalog.status === 'mutating'
-  const catalogBlocking = toolCatalog.status === 'loading' || toolCatalog.status === 'error'
+  const catalogReady = toolCatalog.status === 'ready'
   const canSubmit =
     submitState.status !== 'submitting' &&
     isNonEmptyTrimmed(document) &&
     document.length <= MAX_DOCUMENT_LENGTH &&
-    catalogReady &&
-    !catalogBlocking
+    catalogReady
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -195,16 +193,23 @@ export default function App() {
             <p className="status-loading">Chargement de l’analyse persistée…</p>
           )}
 
+          {controller.connection.status === 'reconnecting' && (
+            <p className="status-warning">
+              Flux d’événements interrompu : reconnexion automatique en cours…
+            </p>
+          )}
+
+          {controller.connection.status === 'error' && (
+            <div className="connection-error" role="alert">
+              <p className="status-error">{controller.connection.message}</p>
+              <button type="button" className="connection-retry" onClick={controller.retry}>
+                Réessayer la connexion
+              </button>
+            </div>
+          )}
+
           {snapshot !== null && (
             <>
-              {controller.connection.status === 'reconnecting' && (
-                <p className="status-warning">
-                  Flux d’événements interrompu : reconnexion automatique en cours…
-                </p>
-              )}
-              {controller.connection.status === 'error' && snapshot === null && (
-                <p className="status-error">{controller.connection.message}</p>
-              )}
               {controller.malformedMessage !== null && (
                 <p className="status-warning">
                   Événement ignoré (format inattendu) : {controller.malformedMessage}

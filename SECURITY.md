@@ -50,9 +50,10 @@ C'est la question du checkpoint. Réponse en trois temps.
 
    Le prompt système déclare que tout ce qui est entre ces bornes est une
    donnée fournie par un tiers non fiable, jamais une consigne. Le `nonce` est
-   régénéré à chaque analyse : le document ne peut pas deviner sa propre borne
-   fermante pour « sortir » de la zone de données, ce qu'un délimiteur fixe et
-   connu (```` ``` ````, `---`, `<document>`) permettrait.
+   régénéré à chaque analyse : il rend la falsification de la borne fermante
+   nettement plus difficile qu'un délimiteur fixe et connu (```` ``` ````,
+   `---`, `<document>`). Ce cloisonnement réduit le risque ; il ne constitue
+   pas, à lui seul, une preuve formelle contre toute injection.
 4. L'analyse se déroule normalement et le verdict est rendu.
 
 ### Pourquoi la détection n'est PAS la défense
@@ -70,22 +71,26 @@ Elle ne dépend pas du texte reçu, donc ne se contourne pas par reformulation :
 |---|---|
 | Outils figés côté serveur à la création de l'analyse (`analysis_tool_states`) | Un document ne peut **pas** activer un outil désactivé : son schéma n'est même pas envoyé au modèle, et `execute_tool` revérifie la liste figée avant exécution. |
 | Les trois outils ne prennent **aucun argument** | Le document ne peut atteindre aucun paramètre d'outil. |
-| Sortie validée par schéma Pydantic strict | Un modèle qui obéirait à l'injection et répondrait en texte libre voit sa sortie **rejetée**, pas affichée. Le verdict ne peut pas être « imposé » par le document. |
+| Sortie validée par schéma Pydantic strict | Un modèle qui répond en texte libre voit sa sortie **rejetée**, pas affichée. Une sortie injectée qui respecterait parfaitement le schéma reste un risque de qualité sémantique à tester avec le vrai modèle. |
 | Requêtes SQLite toutes paramétrées | `DROP TABLE analyses; --` est stocké comme du texte, jamais interprété (cas 3 de l'éval). |
 | Clé jamais placée dans un prompt | Aucune injection ne peut exfiltrer un secret d'un contexte où il n'est pas. |
 
-**Conclusion honnête** : une injection réussie peut au pire dégrader la
-*qualité* d'une analyse — un expert qui écrit n'importe quoi, ce que la
-validation de schéma rattrape généralement. Elle ne peut ni étendre les
-capacités du système, ni exfiltrer un secret, ni modifier des données.
+**Conclusion honnête** : les contrôles structurels empêchent le texte soumis
+d'activer un outil absent de la configuration, de fournir des arguments aux
+outils actuels ou de lire une clé qui n'est jamais placée dans le prompt. Ils
+ne garantissent pas la justesse sémantique du verdict : une injection peut
+encore influencer le contenu produit par le modèle tout en respectant le
+schéma. Le harnais local vérifie les invariants techniques avec un fournisseur
+simulé ; un smoke test MiniMax reste nécessaire pour mesurer ce risque réel.
 
 ## 3. Résistance aux abus
 
 | Entrée | Réponse |
 |---|---|
-| Corps de requête > 1 Mo | HTTP **413** décidé sur `Content-Length`, **avant** lecture du corps (un envoi de 40 Mo n'est jamais chargé en mémoire). |
+| Corps de requête > 1 Mo | HTTP **413** sur l'en-tête quand il est fiable, sinon dès que le flux reçu franchit 1 Mo. Le serveur ne conserve jamais plus de 1 Mo de corps accepté. |
 | Document vide ou > 12 000 caractères | HTTP **422**, aucune analyse créée. |
 | Dix clics sur « Convoquer » | Bouton verrouillé pendant la soumission côté front ; côté serveur, au-delà de `MAX_CONCURRENT_ANALYSES` (3 par défaut) analyses actives, HTTP **429** avec la raison et la marche à suivre. |
+| Analyse créée mais jamais démarrée | Après `QUEUED_ANALYSIS_TTL_SECONDS` (300 s par défaut), elle passe en `failed/start_timeout` lors de la prochaine soumission et libère sa place. |
 | `/start` appelé plusieurs fois | Compare-and-set SQL atomique `queued → running` : une seule tâche démarre, les autres reçoivent `already_started`. |
 | Émojis, cyrillique, RTL | Stockés et rendus à l'identique (UTF-8 de bout en bout). |
 

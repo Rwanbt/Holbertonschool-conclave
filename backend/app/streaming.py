@@ -48,6 +48,10 @@ persistance SQLite sont gérées par la fermeture de l'appelant (experts.py).
 """
 
 
+class LiveSinkError(RuntimeError):
+    """La diffusion/persistance locale a échoué, pas le fournisseur LLM."""
+
+
 def normalize_delta(buffer: str, incoming: str) -> str:
     """Calcule le vrai delta entre l'accumulé et un morceau reçu.
 
@@ -401,7 +405,19 @@ class StreamCollector:
         if self._live_sink is None or not self._response_role:
             return
         self._started = True
-        await self._live_sink("agent.response.started", {"role": self._response_role})
+        await self._emit_live(
+            "agent.response.started", {"role": self._response_role}
+        )
+
+    async def _emit_live(self, kind: str, fields: dict[str, Any]) -> None:
+        if self._live_sink is None:
+            return
+        try:
+            await self._live_sink(kind, fields)
+        except Exception as exc:  # noqa: BLE001 - distinguée du fournisseur
+            raise LiveSinkError(
+                f"live event sink failed: {exc.__class__.__name__}"
+            ) from exc
 
     async def _flush_size(self) -> None:
         if len(self._live_buffer) >= self._settings.stream_delta_batch_chars:
@@ -426,10 +442,10 @@ class StreamCollector:
                 continue
             if not self._started:
                 self._started = True
-                await self._live_sink(
+                await self._emit_live(
                     "agent.response.started", {"role": self._response_role}
                 )
-            await self._live_sink(
+            await self._emit_live(
                 "agent.response.delta",
                 {"role": self._response_role, "delta": piece},
             )
@@ -473,24 +489,29 @@ async def stream_chat_completion(
     temperature: float,
     n: int,
     tools: list[dict[str, Any]],
-    tool_choice: str,
+    tool_choice: str | None,
     settings: Settings,
     live_sink: LiveSink | None = None,
     response_role: str | None = None,
 ) -> StreamedCompletion:
     """Appelle MiniMax en streaming et reconstitue la réponse complète."""
-    stream = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_completion_tokens=max_completion_tokens,
-        temperature=temperature,
-        n=n,
-        tools=tools,
-        tool_choice=tool_choice,
-        stream=True,
-        stream_options={"include_usage": True},
-        extra_body={"thinking": {"type": "disabled"}},
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "max_completion_tokens": max_completion_tokens,
+        "temperature": temperature,
+        "n": n,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "extra_body": {"thinking": {"type": "disabled"}},
+    }
+    # Certains fournisseurs OpenAI-compatibles refusent `tools=[]` ou
+    # `tool_choice=null`. Une analyse où tous les switches sont désactivés
+    # reste donc une requête de chat valide, sans paramètres d'outils.
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = tool_choice or "auto"
+    stream = await client.chat.completions.create(**kwargs)
     collector = StreamCollector(settings, live_sink=live_sink, response_role=response_role)
     async for chunk in stream:
         await collector.feed(chunk)

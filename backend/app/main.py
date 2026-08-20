@@ -103,35 +103,85 @@ app.add_middleware(
 #: Le document est plafonné à 12 000 caractères (Pydantic). Mais Pydantic ne
 #: décide qu'APRÈS avoir lu et parsé tout le corps : un envoi de 40 Mo serait
 #: intégralement chargé en mémoire avant d'être refusé en 422. On coupe donc
-#: bien avant, sur l'en-tête `Content-Length`, avec une marge confortable pour
-#: l'échappement JSON et l'UTF-8 multi-octets.
+#: bien avant, y compris quand `Content-Length` est absent ou mensonger, avec
+#: une marge confortable pour l'échappement JSON et l'UTF-8 multi-octets.
 MAX_REQUEST_BYTES = 1_000_000
 
 
-@app.middleware("http")
-async def reject_oversized_bodies(request: Request, call_next):
-    """Refuse tôt, clairement, et sans jamais mentir sur la raison."""
-    raw_length = request.headers.get("content-length")
-    if raw_length is not None:
-        try:
-            declared = int(raw_length)
-        except ValueError:
-            return JSONResponse(
-                status_code=400,
-                content={"detail": "En-tête Content-Length invalide."},
-            )
-        if declared > MAX_REQUEST_BYTES:
-            return JSONResponse(
-                status_code=413,
-                content={
-                    "detail": (
-                        f"Corps de requête trop volumineux ({declared} octets). "
-                        f"La limite est de {MAX_REQUEST_BYTES} octets ; un document "
-                        "ne peut de toute façon pas dépasser 12 000 caractères."
-                    )
-                },
-            )
-    return await call_next(request)
+class RequestBodyLimitMiddleware:
+    """ASGI pur : borne le flux reçu, même sans ``Content-Length``.
+
+    Les corps acceptés (au plus 1 Mo) sont rejoués à FastAPI. Dès que le flux
+    dépasse la limite, la lecture s'arrête et une 413 explicite est renvoyée.
+    """
+
+    def __init__(self, application: Any, max_bytes: int) -> None:
+        self.application = application
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: dict[str, Any], receive, send) -> None:
+        if scope["type"] != "http" or scope.get("method") not in {
+            "POST",
+            "PUT",
+            "PATCH",
+        }:
+            await self.application(scope, receive, send)
+            return
+
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                declared = int(raw_length.decode("ascii"))
+            except (UnicodeDecodeError, ValueError):
+                response = JSONResponse(
+                    status_code=400,
+                    content={"detail": "En-tête Content-Length invalide."},
+                )
+                await response(scope, receive, send)
+                return
+            if declared > self.max_bytes:
+                await self._reject(scope, receive, send, declared)
+                return
+
+        messages: list[dict[str, Any]] = []
+        received = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message["type"] == "http.disconnect":
+                break
+            if message["type"] != "http.request":
+                continue
+            received += len(message.get("body", b""))
+            if received > self.max_bytes:
+                await self._reject(scope, receive, send, received)
+                return
+            if not message.get("more_body", False):
+                break
+
+        async def replay_receive() -> dict[str, Any]:
+            if messages:
+                return messages.pop(0)
+            return {"type": "http.disconnect"}
+
+        await self.application(scope, replay_receive, send)
+
+    async def _reject(self, scope, receive, send, size: int) -> None:
+        response = JSONResponse(
+            status_code=413,
+            content={
+                "detail": (
+                    f"Corps de requête trop volumineux ({size} octets). "
+                    f"La limite est de {self.max_bytes} octets ; un document "
+                    "ne peut de toute façon pas dépasser 12 000 caractères."
+                )
+            },
+        )
+        await response(scope, receive, send)
+
+
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
 
 
 def _connection_factory(settings: Settings):
@@ -237,40 +287,29 @@ async def create_analysis(
     # à l'utilisateur ce que le serveur a vu dans son document.
     signals = security.detect_injection_signals(request.document)
 
-    async with db.open_connection(settings.database_path) as conn:
-        # Dix clics sur « Convoquer » ne doivent pas créer dix analyses ni
-        # saturer le fournisseur. On refuse explicitement, avec la raison et
-        # la marche à suivre — jamais un échec muet.
-        active = await db.count_active_analyses(conn)
-        if active >= settings.max_concurrent_analyses:
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "detail": (
-                        f"{active} analyses sont déjà en cours (limite : "
-                        f"{settings.max_concurrent_analyses}). Attendez qu'une "
-                        "analyse se termine avant d'en lancer une nouvelle."
-                    )
-                },
+    try:
+        async with db.open_connection(settings.database_path) as conn:
+            rows = await db.create_queued_analysis(
+                conn,
+                analysis_id=analysis_id,
+                document=request.document,
+                now=now,
+                signals=signals,
+                max_active=settings.max_concurrent_analyses,
+                queued_ttl_seconds=settings.queued_analysis_ttl_seconds,
             )
-        await db.create_analysis(conn, analysis_id, request.document, now, status="queued")
-        rows = await db.snapshot_analysis_tool_states(conn, analysis_id)
-        tool_configuration = _tool_configuration_from_rows(rows)
-        await db.set_analysis_security(conn, analysis_id, signals)
-        await db.insert_analysis_event(
-            conn,
-            analysis_id,
-            "analysis.created",
-            {
-                "analysis_id": analysis_id,
-                "created_at": now,
-                "enabled_tools": tool_configuration.enabled_tools,
-                "disabled_tools": tool_configuration.disabled_tools,
-                # Jamais le document lui-même : uniquement les noms de motifs.
-                "security_signals": signals,
+    except db.ActiveAnalysisLimitReached as exc:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": (
+                    f"{exc.active} analyses sont déjà en cours (limite : "
+                    f"{settings.max_concurrent_analyses}). Attendez qu'une "
+                    "analyse se termine avant d'en lancer une nouvelle."
+                )
             },
-            now,
         )
+    tool_configuration = _tool_configuration_from_rows(rows)
 
     return AnalysisCreated(
         analysis_id=analysis_id,
@@ -314,13 +353,6 @@ async def start_analysis(
                 status=current["status"] if current else "running",
                 already_started=True,
             )
-        await db.insert_analysis_event(
-            conn,
-            analysis_id,
-            "analysis.started",
-            {"analysis_id": analysis_id, "started_at": started_at},
-            started_at,
-        )
         document = row["document"]
 
     task = asyncio.create_task(

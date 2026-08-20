@@ -265,6 +265,34 @@
   color: var(--warning-fg);
 }
 
+.connection-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.connection-error .status-error {
+  flex: 1;
+  margin: 0;
+}
+
+.connection-retry {
+  flex: none;
+  border: 1px solid currentColor;
+  border-radius: 0.35rem;
+  padding: 0.55rem 0.8rem;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+
+.connection-retry:hover {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+
 .status-notice {
   padding: 0.75rem;
   border: 1px solid var(--success-fg-alt);

@@ -1,6 +1,7 @@
 """Tests de la couche SQLite durable (Palier 4) — base temporaire par test."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -69,6 +70,96 @@ def test_persistence_after_reopen(temp_db) -> None:
         assert row["document"] == "contenu"
 
     asyncio.run(read_after_reopen())
+
+
+def test_create_queued_analysis_persists_one_complete_initial_state(temp_db) -> None:
+    asyncio.run(db.initialize(temp_db, "measure_current_document"))
+
+    async def create_and_read():
+        async with db.open_connection(temp_db) as conn:
+            rows = await db.create_queued_analysis(
+                conn,
+                analysis_id="atomic-1",
+                document="document",
+                now=db.utc_now_iso(),
+                signals=["override_instructions"],
+                max_active=3,
+                queued_ttl_seconds=300,
+            )
+            analysis = await db.get_analysis(conn, "atomic-1")
+            security = await db.get_analysis_security(conn, "atomic-1")
+            events = await db.list_events_after(conn, "atomic-1")
+        return rows, analysis, security, events
+
+    rows, analysis, security, events = asyncio.run(create_and_read())
+    assert analysis["status"] == "queued"
+    assert len(rows) == 3
+    assert {row["tool_name"] for row in rows if not row["enabled"]} == {
+        "measure_current_document"
+    }
+    assert security == ["override_instructions"]
+    assert [event["event_type"] for event in events] == ["analysis.created"]
+
+
+def test_concurrent_creation_has_one_winner_at_limit_one(temp_db) -> None:
+    asyncio.run(db.initialize(temp_db, ""))
+
+    async def submit(analysis_id: str) -> str:
+        async with db.open_connection(temp_db) as conn:
+            try:
+                await db.create_queued_analysis(
+                    conn,
+                    analysis_id=analysis_id,
+                    document="document",
+                    now=db.utc_now_iso(),
+                    signals=[],
+                    max_active=1,
+                    queued_ttl_seconds=300,
+                )
+            except db.ActiveAnalysisLimitReached:
+                return "limited"
+            return "created"
+
+    async def race():
+        results = await asyncio.gather(submit("race-a"), submit("race-b"))
+        async with db.open_connection(temp_db) as conn:
+            active = await db.count_active_analyses(conn)
+        return results, active
+
+    results, active = asyncio.run(race())
+    assert sorted(results) == ["created", "limited"]
+    assert active == 1
+
+
+def test_abandoned_queued_analysis_expires_and_releases_capacity(temp_db) -> None:
+    asyncio.run(db.initialize(temp_db, ""))
+    now = datetime.now(timezone.utc)
+    stale_created_at = (now - timedelta(minutes=10)).isoformat()
+
+    async def create_stale_then_new():
+        async with db.open_connection(temp_db) as conn:
+            await db.create_analysis(
+                conn, "stale", "document ancien", stale_created_at
+            )
+            await db.create_queued_analysis(
+                conn,
+                analysis_id="fresh",
+                document="document récent",
+                now=now.isoformat(),
+                signals=[],
+                max_active=1,
+                queued_ttl_seconds=30,
+            )
+            stale = await db.get_analysis(conn, "stale")
+            fresh = await db.get_analysis(conn, "fresh")
+            events = await db.list_events_after(conn, "stale")
+        return stale, fresh, events
+
+    stale, fresh, events = asyncio.run(create_stale_then_new())
+    assert stale["status"] == "failed"
+    assert stale["error_code"] == "start_timeout"
+    assert fresh["status"] == "queued"
+    assert [event["event_type"] for event in events] == ["analysis.failed"]
 
 
 def test_running_analyses_become_interrupted_at_restart(temp_db) -> None:
@@ -282,9 +373,11 @@ def test_start_analysis_is_a_single_winner_compare_and_set(temp_db) -> None:
             first = await db.start_analysis(conn, "a1", db.utc_now_iso())
             second = await db.start_analysis(conn, "a1", db.utc_now_iso())
             row = await db.get_analysis(conn, "a1")
+            events = await db.list_events_after(conn, "a1")
         assert first is True
         assert second is False
         assert row["status"] == "running"
         assert row["started_at"] is not None
+        assert [event["event_type"] for event in events] == ["analysis.started"]
 
     asyncio.run(race())

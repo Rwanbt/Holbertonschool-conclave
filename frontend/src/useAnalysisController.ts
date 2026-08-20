@@ -4,7 +4,7 @@ import { openAnalysisEventSource, type SseClient } from './api/sse'
 import { writeStoredLastEventId } from './storage'
 import { isTerminalAnalysisStatus, isTerminalEventType } from './steps'
 import type { AnalysisEvent, AnalysisEventEnvelope, AnalysisSnapshot } from './types'
-import { isApiError } from './errors'
+import { isApiError, toErrorMessage } from './errors'
 
 export type AnalysisConnection =
   | { status: 'idle' }
@@ -20,11 +20,19 @@ export interface AnalysisController {
   connection: AnalysisConnection
   malformedMessage: string | null
   lastEventId: number
+  retry: () => void
 }
 
 /** Délai après lequel `/start` est déclenché même sans `onopen` (filet de
  * sécurité contre un flux SSE qui ne s'ouvrirait jamais). */
 export const START_FALLBACK_MS = 3000
+export const START_MAX_ATTEMPTS = 3
+export const START_RETRY_DELAY_MS = 500
+export const SSE_RECONNECT_TIMEOUT_MS = 10000
+
+function wait(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs))
+}
 
 function toAnalysisEvent(envelope: AnalysisEventEnvelope): AnalysisEvent {
   return {
@@ -54,9 +62,9 @@ async function loadFullHistory(analysisId: string): Promise<AnalysisEventEnvelop
  * parallèle (`readStoredLastEventId` reste une optimisation de reprise,
  * jamais la seule source : l'historique serveur est autoritaire). Le flux
  * SSE ne rouvre jamais depuis `after=0` après hydratation, et n'est jamais
- * ouvert du tout pour une analyse déjà terminale. `POST /start` n'est
- * appelé qu'une fois `onopen` reçu, et au plus une fois par montage (il est
- * de toute façon idempotent côté serveur).
+ * ouvert du tout pour une analyse déjà terminale. `POST /start` est lancé
+ * après `onopen` (ou après le délai de secours), avec trois tentatives
+ * bornées ; l'endpoint reste idempotent côté serveur.
  */
 export function useAnalysisController(
   analysisId: string | null,
@@ -67,6 +75,7 @@ export function useAnalysisController(
   const [connection, setConnection] = useState<AnalysisConnection>({ status: 'idle' })
   const [malformedMessage, setMalformedMessage] = useState<string | null>(null)
   const [lastEventId, setLastEventId] = useState(0)
+  const [retryNonce, setRetryNonce] = useState(0)
 
   const sseRef = useRef<SseClient | null>(null)
   const snapshotRef = useRef<AnalysisSnapshot | null>(null)
@@ -74,6 +83,10 @@ export function useAnalysisController(
   const disconnectedRef = useRef(false)
 
   snapshotRef.current = snapshot
+
+  const retry = useCallback((): void => {
+    setRetryNonce((current) => current + 1)
+  }, [])
 
   const reloadSnapshot = useCallback(
     async (id: string): Promise<void> => {
@@ -105,11 +118,21 @@ export function useAnalysisController(
     const id: string = analysisId
 
     let cancelled = false
+    let terminalObserved = false
+    let executionObserved = false
     let startFallbackTimer: ReturnType<typeof setTimeout> | null = null
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
     startedRef.current = false
     disconnectedRef.current = false
     setMalformedMessage(null)
     setConnection({ status: 'loading' })
+
+    function clearReconnectTimer(): void {
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer)
+        reconnectTimer = null
+      }
+    }
 
     function startOnce(): void {
       if (startedRef.current || cancelled) {
@@ -120,10 +143,28 @@ export function useAnalysisController(
         clearTimeout(startFallbackTimer)
         startFallbackTimer = null
       }
-      void startAnalysis(id).catch(() => {
-        // Idempotent côté serveur : une erreur réseau ici n'empêche pas le
-        // flux SSE de continuer à refléter l'état réel.
-      })
+      void (async () => {
+        let lastError: unknown = null
+        for (let attempt = 1; attempt <= START_MAX_ATTEMPTS; attempt += 1) {
+          try {
+            await startAnalysis(id)
+            return
+          } catch (error) {
+            lastError = error
+            if (cancelled || terminalObserved || executionObserved) return
+            if (attempt < START_MAX_ATTEMPTS) {
+              await wait(START_RETRY_DELAY_MS * attempt)
+            }
+          }
+        }
+
+        if (cancelled || terminalObserved || executionObserved) return
+        startedRef.current = false
+        setConnection({
+          status: 'error',
+          message: `Le lancement de l’analyse a échoué après ${START_MAX_ATTEMPTS} tentatives. ${toErrorMessage(lastError)} Réessayez la connexion.`,
+        })
+      })()
     }
 
     function openStream(afterEventId: number): void {
@@ -140,11 +181,14 @@ export function useAnalysisController(
 
       const client = openAnalysisEventSource(id, afterEventId, {
         onOpen: () => {
+          if (cancelled || sseRef.current !== client) return
           disconnectedRef.current = false
+          clearReconnectTimer()
           setConnection({ status: 'live' })
           startOnce()
         },
         onEvent: (event: AnalysisEvent) => {
+          if (cancelled || sseRef.current !== client) return
           const snapshotNow = snapshotRef.current
           if (snapshotNow !== null && event.payload.analysis_id !== snapshotNow.analysis_id) {
             return
@@ -159,7 +203,13 @@ export function useAnalysisController(
             writeStoredLastEventId(id, event.id)
             setLastEventId(event.id)
           }
+          if (event.type !== 'analysis.created') {
+            executionObserved = true
+          }
           if (isTerminalEventType(event.type)) {
+            terminalObserved = true
+            disconnectedRef.current = false
+            clearReconnectTimer()
             client.close()
             sseRef.current = null
             setConnection({ status: 'closed' })
@@ -177,11 +227,26 @@ export function useAnalysisController(
           }
         },
         onMalformed: (detail: string) => {
+          if (cancelled || sseRef.current !== client) return
           setMalformedMessage(detail)
         },
         onError: () => {
+          if (cancelled || sseRef.current !== client) return
           disconnectedRef.current = true
           setConnection({ status: 'reconnecting' })
+          if (reconnectTimer === null) {
+            reconnectTimer = setTimeout(() => {
+              reconnectTimer = null
+              if (!cancelled && disconnectedRef.current) {
+                client.close()
+                sseRef.current = null
+                setConnection({
+                  status: 'error',
+                  message: 'Le flux temps réel ne répond plus. Vérifiez le backend puis réessayez la connexion.',
+                })
+              }
+            }, SSE_RECONNECT_TIMEOUT_MS)
+          }
         },
       })
       sseRef.current = client
@@ -232,10 +297,17 @@ export function useAnalysisController(
         writeStoredLastEventId(id, maxId)
       }
 
-      if (isTerminalAnalysisStatus(initialSnapshot.status)) {
+      const historyIsTerminal = hydrated.some((event) => isTerminalEventType(event.type))
+      if (isTerminalAnalysisStatus(initialSnapshot.status) || historyIsTerminal) {
+        terminalObserved = true
         // Analyse déjà terminée : on affiche l'état final sans rouvrir le
         // flux (ce n'est pas une animation live à rejouer).
         setConnection({ status: 'closed' })
+        if (historyIsTerminal && !isTerminalAnalysisStatus(initialSnapshot.status)) {
+          // L'événement terminal peut être validé juste avant que le snapshot
+          // chargé en parallèle ne soit lu. On resynchronise sans rouvrir SSE.
+          void reloadSnapshot(id)
+        }
         return
       }
 
@@ -250,10 +322,11 @@ export function useAnalysisController(
         clearTimeout(startFallbackTimer)
         startFallbackTimer = null
       }
+      clearReconnectTimer()
       sseRef.current?.close()
       sseRef.current = null
     }
-  }, [analysisId, onNotFound, reloadSnapshot])
+  }, [analysisId, onNotFound, reloadSnapshot, retryNonce])
 
-  return { snapshot, events, connection, malformedMessage, lastEventId }
+  return { snapshot, events, connection, malformedMessage, lastEventId, retry }
 }

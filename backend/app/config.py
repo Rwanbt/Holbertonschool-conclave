@@ -108,6 +108,16 @@ class Settings(BaseSettings):
             "plutôt que d'accepter dix soumissions et de saturer le fournisseur."
         ),
     )
+    queued_analysis_ttl_seconds: int = Field(
+        300,
+        ge=30,
+        le=86400,
+        description=(
+            "Durée maximale d'une analyse restée queued sans appel /start. "
+            "Elle est ensuite marquée failed lors de la prochaine soumission, "
+            "afin de ne pas occuper éternellement une place de concurrence."
+        ),
+    )
     stream_flush_interval_ms: int = Field(
         50,
         ge=10,

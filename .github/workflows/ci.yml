@@ -16,7 +16,7 @@ jobs:
           python-version: "3.11"
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
-      - name: Run backend test suite (no MiniMax key: real-provider smoke test skips itself)
+      - name: "Run backend test suite (no MiniMax key: real-provider smoke test skips itself)"
         run: python -m pytest backend/tests -q
 
       - name: Run the evaluation suite (scored, no MiniMax key needed)
