@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
+  parseAgentResponseCompletedPayload,
+  parseAgentResponseDeltaPayload,
+  parseAgentResponseFailedPayload,
+  parseAgentResponseStartedPayload,
   parseAnalysisCreated,
   parseAnalysisEvent,
   parseAnalysisSnapshot,
@@ -235,12 +239,196 @@ describe('parseToolCatalogResponse', () => {
 })
 
 describe('parseToolCommandResponse', () => {
-  it('accepte une réponse booléenne propre', () => {
+  it('accepte une réponse list complète avec catalogue', () => {
     const parsed = parseToolCommandResponse({
-      tool_name: 'measure_current_document',
-      enabled: false,
+      action: 'list',
+      message: 'Catalogue des outils.',
+      tool_name: null,
+      enabled: null,
+      tools: [
+        { tool_name: 'measure_current_document', enabled: true, description: 'a' },
+        {
+          tool_name: 'find_security_indicators_in_current_document',
+          enabled: false,
+          description: 'b',
+        },
+        { tool_name: 'estimate_current_analysis_cost', enabled: true, description: 'c' },
+      ],
     })
-    expect(parsed.enabled).toBe(false)
+    expect(parsed.action).toBe('list')
+    expect(parsed.tool_name).toBeNull()
+    expect(parsed.enabled).toBeNull()
+    expect(parsed.tools).toHaveLength(3)
+  })
+
+  it('accepte une réponse enable avec l’outil visé et le catalogue', () => {
+    const parsed = parseToolCommandResponse({
+      action: 'enable',
+      message: 'Outil activé.',
+      tool_name: 'measure_current_document',
+      enabled: true,
+      tools: [
+        { tool_name: 'measure_current_document', enabled: true, description: 'a' },
+      ],
+    })
+    expect(parsed.tool_name).toBe('measure_current_document')
+    expect(parsed.enabled).toBe(true)
+  })
+
+  it('rejette une action inconnue', () => {
+    expect(() =>
+      parseToolCommandResponse({
+        action: 'toggle' as never,
+        message: 'x',
+        tool_name: null,
+        enabled: null,
+        tools: [],
+      }),
+    ).toThrow(ResponseValidationError)
+  })
+
+  it('rejette un catalogue de plus de trois outils', () => {
+    const tools = [
+      { tool_name: 'measure_current_document', enabled: true, description: 'a' },
+      {
+        tool_name: 'find_security_indicators_in_current_document',
+        enabled: true,
+        description: 'b',
+      },
+      { tool_name: 'estimate_current_analysis_cost', enabled: true, description: 'c' },
+      { tool_name: 'measure_current_document', enabled: true, description: 'd' },
+    ]
+    expect(() =>
+      parseToolCommandResponse({
+        action: 'list',
+        message: 'x',
+        tool_name: null,
+        enabled: null,
+        tools,
+      }),
+    ).toThrow(ResponseValidationError)
+  })
+
+  it('rejette un tool_name inconnu', () => {
+    expect(() =>
+      parseToolCommandResponse({
+        action: 'disable',
+        message: 'x',
+        tool_name: 'measure_nothing',
+        enabled: false,
+        tools: [],
+      }),
+    ).toThrow(ResponseValidationError)
+  })
+})
+
+describe('événements live agent.response.*', () => {
+  const deltaPayload = {
+    analysis_id: 'abc',
+    role: 'avocat',
+    sequence: 3,
+    delta: 'le texte',
+  }
+
+  it('accepte les quatre événements via parseAnalysisEvent', () => {
+    const started = parseAnalysisEvent(1, 'agent.response.started', {
+      analysis_id: 'abc',
+      role: 'procureur',
+    })
+    expect(started.type).toBe('agent.response.started')
+
+    const delta = parseAnalysisEvent(2, 'agent.response.delta', deltaPayload)
+    expect(delta.type).toBe('agent.response.delta')
+    expect(delta.payload.sequence).toBe(3)
+    expect(delta.payload.delta).toBe('le texte')
+
+    const completed = parseAnalysisEvent(3, 'agent.response.completed', {
+      analysis_id: 'abc',
+      role: 'comptable',
+    })
+    expect(completed.type).toBe('agent.response.completed')
+
+    const failed = parseAnalysisEvent(4, 'agent.response.failed', {
+      analysis_id: 'abc',
+      role: 'arbitre',
+      error_code: 'protocol_error',
+    })
+    expect(failed.type).toBe('agent.response.failed')
+    expect(failed.payload.error_code).toBe('protocol_error')
+  })
+
+  it('valide directement les payloads dédiés', () => {
+    expect(parseAgentResponseStartedPayload({ analysis_id: 'a', role: 'avocat' }).role).toBe(
+      'avocat',
+    )
+    expect(
+      parseAgentResponseDeltaPayload(deltaPayload).sequence,
+    ).toBe(3)
+    expect(
+      parseAgentResponseCompletedPayload({ analysis_id: 'a', role: 'arbitre' }).role,
+    ).toBe('arbitre')
+    expect(
+      parseAgentResponseFailedPayload({
+        analysis_id: 'a',
+        role: 'comptable',
+        error_code: 'expert_timeout',
+      }).error_code,
+    ).toBe('expert_timeout')
+  })
+
+  it('rejette un rôle inconnu dans un delta', () => {
+    expect(() =>
+      parseAnalysisEvent(2, 'agent.response.delta', {
+        ...deltaPayload,
+        role: 'notaire',
+      }),
+    ).toThrow(ResponseValidationError)
+  })
+
+  it('rejette une séquence non strictement positive', () => {
+    expect(() =>
+      parseAnalysisEvent(2, 'agent.response.delta', { ...deltaPayload, sequence: 0 }),
+    ).toThrow(ResponseValidationError)
+    expect(() =>
+      parseAnalysisEvent(2, 'agent.response.delta', { ...deltaPayload, sequence: -1 }),
+    ).toThrow(ResponseValidationError)
+    expect(() =>
+      parseAnalysisEvent(2, 'agent.response.delta', { ...deltaPayload, sequence: 1.5 }),
+    ).toThrow(ResponseValidationError)
+  })
+
+  it('rejette un delta vide', () => {
+    expect(() =>
+      parseAnalysisEvent(2, 'agent.response.delta', { ...deltaPayload, delta: '' }),
+    ).toThrow(ResponseValidationError)
+  })
+
+  it('rejette un delta dépassant la borne du contrat', () => {
+    expect(() =>
+      parseAnalysisEvent(2, 'agent.response.delta', {
+        ...deltaPayload,
+        delta: 'x'.repeat(513),
+      }),
+    ).toThrow(ResponseValidationError)
+  })
+
+  it("rejette un analysis_id vide", () => {
+    expect(() =>
+      parseAnalysisEvent(2, 'agent.response.delta', {
+        ...deltaPayload,
+        analysis_id: '',
+      }),
+    ).toThrow(ResponseValidationError)
+  })
+
+  it("rejette un failed sans error_code", () => {
+    expect(() =>
+      parseAnalysisEvent(4, 'agent.response.failed', {
+        analysis_id: 'abc',
+        role: 'arbitre',
+        error_code: '',
+      }),
+    ).toThrow(ResponseValidationError)
   })
 })
 
