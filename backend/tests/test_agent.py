@@ -74,8 +74,10 @@ class _FakeCompletion:
 class _FakeCompletions:
     def __init__(self, responses):
         self._responses = list(responses)
+        self.created_kwargs: list[dict] = []
 
     async def create(self, **kwargs):
+        self.created_kwargs.append(kwargs)
         if not self._responses:
             raise AssertionError("agent loop called the provider too many times")
         return self._responses.pop(0)
@@ -116,6 +118,37 @@ class TestRegistry:
             # Aucun paramètre texte libre : le document ne peut pas transiter
             # par les arguments d'outil.
             assert schema["function"]["parameters"]["properties"] == {}
+
+    def test_allowed_tools_filters_schemas(self) -> None:
+        allowed = frozenset({"measure_current_document"})
+        schemas = agent.registry_tool_schemas(allowed)
+        names = {schema["function"]["name"] for schema in schemas}
+        assert names == allowed
+
+    def test_empty_allowed_tools_yields_empty_schema_list(self) -> None:
+        assert agent.registry_tool_schemas(frozenset()) == []
+
+    def test_zero_tools_omits_tools_kwarg_without_provider_error(self, monkeypatch) -> None:
+        client = _FakeClient(
+            [_FakeCompletion([_FakeChoice(_FakeMessage(content="Je ne peux pas vérifier."))])]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda s: client)
+
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse le document."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=3,
+                allowed_tools=frozenset(),
+            )
+        )
+        assert result.answer == "Je ne peux pas vérifier."
+        assert "tools" not in client.chat.completions.created_kwargs[0]
+        assert "tool_choice" not in client.chat.completions.created_kwargs[0]
 
 
 class TestAgentLoop:

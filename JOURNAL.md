@@ -1,5 +1,59 @@
 # Journal
 
+## 2026-08-20 — R1 : streaming réel et switches indépendants des outils
+
+Corrections livrées sur `claude/corrections-branche-erwan-3jm4q7` (base `origin/erwan`
+== `origin/dev`@171be14), en réponse à `PLAN_R1_CORRECTIF_STREAMING_SWITCHES_TOOLS.md`.
+
+- **Outils, configuration figée par analyse** : schéma SQLite v2
+  (`analysis_tool_states`) — chaque analyse fige, à sa création, une copie
+  immuable du registre global `tool_states` ; une modification ultérieure du
+  registre n'affecte plus jamais une analyse déjà créée. Le backfill de
+  `tool_states` est désormais un `INSERT OR IGNORE` inconditionnel par outil
+  (au lieu de sauter entièrement dès qu'une ligne existe) : une base
+  ancienne/partielle est complétée sans écraser un choix persisté.
+- **Outils, non-transmission au modèle** : `registry_tool_schemas()` filtre
+  désormais par la configuration figée de l'analyse (un ensemble vide omet
+  `tools`/`tool_choice` plutôt que d'envoyer une liste vide) ; `execute_tool`
+  revérifie cette même configuration à l'exécution, défensivement, sans
+  requête SQLite supplémentaire. `estimate_current_analysis_cost` ne mesure
+  plus implicitement le document : sans mesure préalable, il renvoie
+  `missing_prerequisite` ; le Comptable n'exige une preuve réelle que pour
+  les outils réellement activés pour l'analyse.
+- **Cycle de vie queued → running** : `POST /api/analyses` crée l'analyse en
+  `queued` et fige sa configuration d'outils dans la même requête, sans
+  lancer de tâche de fond. `POST /api/analyses/{id}/start` effectue un
+  compare-and-set SQL atomique `queued → running`, idempotent (202 au premier
+  appel, 200 `already_started` ensuite, 404 si inconnue), et insère
+  `analysis.started` avant `expert.started`. `GET …/events/history` expose un
+  historique JSON paginé (`after`, `limit`, `has_more`) pour l'hydratation F5,
+  indépendant du flux SSE vivant.
+- **Streaming obligatoire** : un tour final sans `<LIVE_RESPONSE>` non vide
+  est maintenant un `protocol_error` (une réponse JSON-only ne peut plus
+  réussir silencieusement avec zéro événement live) ; une seule requête de
+  réparation en streaming est tentée avant d'échouer proprement.
+  `normalize_delta` ne supprime plus une sous-chaîne répétée légitime (retrait
+  de la règle générale `buffer.endswith(incoming)`). `agent.response.started`
+  est émis dès la reconnaissance du marqueur live, plus au premier paquet
+  bufferisé. Nouveaux événements `agent.round.started`/`agent.round.completed`
+  et délai de flush configurable (`STREAM_FLUSH_INTERVAL_MS`, 50 ms par défaut).
+- **Frontend, switches avant soumission** : nouveau hook `useToolCatalog`
+  (chargement automatique, mutations sérialisées, compteur de requêtes
+  monotone contre les réponses obsolètes), `ToolsPanel` accessible
+  (`role="switch"`, `aria-checked`, état textuel) rendu sur la première page,
+  avant le document — et en lecture seule sur la configuration figée pendant
+  une analyse `queued`/`running`.
+- **Frontend, progression pilotée par événements** : `useAnalysisController`
+  hydrate le snapshot et l'historique paginé en parallèle au montage,
+  n'ouvre plus jamais le SSE pour une analyse déjà terminale, ne rappelle
+  `/start` qu'une fois après `onopen`. `calculateActiveStep` avance
+  uniquement sur les événements observés : un snapshot terminal qui devance
+  son événement SSE ne fait plus sauter le stepper à la dernière étape.
+- **Tests** : 132 tests backend (+ 1 smoke MiniMax réel opt-in, skip sans
+  clé) et 84 tests frontend (nouveaux : `@testing-library/react` + `jsdom`
+  pour exercer les hooks et les switches par interaction réelle). Workflow
+  CI GitHub Actions ajouté (`backend` + `frontend`, sans clé MiniMax).
+
 ## 2026-08-20 — Palier 4 bonus : streaming natif MiniMax-M3 + SSE temps réel
 
 - **Streaming** : nouveau module `backend/app/streaming.py` — `StreamCollector`,
