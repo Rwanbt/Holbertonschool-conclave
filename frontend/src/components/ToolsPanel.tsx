@@ -1,93 +1,72 @@
-import { useEffect, useRef, useState } from 'react'
-import { applyToolCommand, fetchToolCatalog } from '../api/client'
-import { httpStatusOf, toErrorMessage } from '../errors'
-import { buildToolCommand, TOOL_LABELS, type ToolAction } from '../toolCommands'
-import type { ToolName, ToolState } from '../types'
-import type { ToolCommandResponse } from '../types'
+import { useState } from 'react'
+import type { ToolCatalog } from '../useToolCatalog'
+import { TOOL_LABELS } from '../toolCommands'
+import type { ToolConfiguration, ToolName, ToolState } from '../types'
 
-interface ConfirmEntry {
-  key: number
-  action: string
-  message: string
+const TOOLS_HELP = '/tools\n/tools list\n/tools enable <nom>\n/tools disable <nom>'
+
+const TOOL_DEPENDENCY: Partial<Record<ToolName, { on: ToolName; label: string }>> = {
+  estimate_current_analysis_cost: {
+    on: 'measure_current_document',
+    label: 'Nécessite Mesurer le document',
+  },
 }
 
-const MAX_HISTORY_ENTRIES = 5
+interface ToolsPanelProps {
+  catalog: ToolCatalog
+  /** Configuration figée de l'analyse en cours (queued/running), ou null
+   * pour la première page / entre deux analyses : dans ce cas le panneau
+   * pilote le registre global destiné à la PROCHAINE analyse. */
+  frozenConfiguration?: ToolConfiguration | null
+}
 
-const TOOLS_HELP =
-  '/tools\n/tools list\n/tools enable <nom>\n/tools disable <nom>'
+function frozenToolStates(
+  frozen: ToolConfiguration,
+  reference: readonly ToolState[],
+): readonly ToolState[] {
+  const descriptionOf = (name: ToolName): string =>
+    reference.find((tool) => tool.tool_name === name)?.description ?? ''
+  const rows: ToolState[] = [
+    ...frozen.enabled_tools.map((tool_name) => ({
+      tool_name,
+      enabled: true,
+      description: descriptionOf(tool_name),
+    })),
+    ...frozen.disabled_tools.map((tool_name) => ({
+      tool_name,
+      enabled: false,
+      description: descriptionOf(tool_name),
+    })),
+  ]
+  return rows.sort((a, b) => a.tool_name.localeCompare(b.tool_name))
+}
 
-export function ToolsPanel() {
-  const [tools, setTools] = useState<readonly ToolState[] | null>(null)
-  const [pendingName, setPendingName] = useState<ToolName | null>(null)
+export function ToolsPanel({ catalog, frozenConfiguration = null }: ToolsPanelProps) {
   const [command, setCommand] = useState('')
-  const [runningCommand, setRunningCommand] = useState(false)
-  const [history, setHistory] = useState<readonly ConfirmEntry[]>([])
   const [helpCopied, setHelpCopied] = useState(false)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const historyKeyRef = useRef(0)
 
-  async function refresh(): Promise<void> {
-    setErrorMessage(null)
-    try {
-      const catalog = await fetchToolCatalog()
-      setTools(catalog.tools)
-    } catch (error) {
-      setErrorMessage(toErrorMessage(error))
-    }
-  }
-
-  useEffect(() => {
-    void refresh()
-  }, [])
-
-  function pushConfirmation(response: ToolCommandResponse): void {
-    historyKeyRef.current += 1
-    const entry: ConfirmEntry = {
-      key: historyKeyRef.current,
-      action: response.action,
-      message: response.message,
-    }
-    setHistory((current) => [...current, entry].slice(-MAX_HISTORY_ENTRIES))
-  }
+  const isFrozen = frozenConfiguration !== null
+  const displayedTools = isFrozen
+    ? frozenToolStates(frozenConfiguration, catalog.tools)
+    : catalog.tools
+  const interactive = !isFrozen
+  const mutating = catalog.status === 'mutating'
+  const loading = catalog.status === 'loading'
 
   async function runCommand(raw: string): Promise<void> {
     const trimmed = raw.trim()
-    if (trimmed.length === 0 || runningCommand) {
+    if (trimmed.length === 0 || mutating) {
       return
     }
-    setErrorMessage(null)
-    setRunningCommand(true)
-    try {
-      const response = await applyToolCommand(trimmed)
-      setTools(response.tools)
-      pushConfirmation(response)
-      setCommand('')
-    } catch (error) {
-      if (httpStatusOf(error) !== 422) {
-        setErrorMessage(toErrorMessage(error))
-      } else {
-        setErrorMessage(
-          'Commande refusée (422) : utilisez /tools, /tools list, /tools enable <nom> ou /tools disable <nom>.',
-        )
-      }
-    } finally {
-      setRunningCommand(false)
-    }
+    await catalog.runCommand(trimmed)
+    setCommand('')
   }
 
   async function toggle(tool: ToolState): Promise<void> {
-    const action: ToolAction = tool.enabled ? 'disable' : 'enable'
-    setErrorMessage(null)
-    setPendingName(tool.tool_name)
-    try {
-      const response = await applyToolCommand(buildToolCommand(action, tool.tool_name))
-      setTools(response.tools)
-      pushConfirmation(response)
-    } catch (error) {
-      setErrorMessage(toErrorMessage(error))
-    } finally {
-      setPendingName(null)
+    if (!interactive || mutating) {
+      return
     }
+    await catalog.toggle(tool.tool_name)
   }
 
   async function copyHelp(): Promise<void> {
@@ -100,111 +79,123 @@ export function ToolsPanel() {
   }
 
   return (
-    <section className="tools-panel" aria-label="Gestion des outils">
+    <section className="tools-panel" aria-label="Outils disponibles pour la prochaine analyse">
       <header className="tools-header">
-        <h2>Outils du serveur</h2>
-        <button type="button" onClick={() => void refresh()}>
-          Actualiser
-        </button>
+        <h2>{isFrozen ? "Outils figés pour cette analyse" : 'Outils disponibles pour la prochaine analyse'}</h2>
+        {!isFrozen && (
+          <button type="button" onClick={() => void catalog.refresh()} disabled={mutating}>
+            Actualiser
+          </button>
+        )}
       </header>
       <p className="tools-note">
-        L’état vit dans la base SQLite ; il est lu à chaque exécution. Les commandes
-        partent uniquement via <code>POST /api/tool-commands</code>.
+        {isFrozen
+          ? "Configuration figée à la création de cette analyse : elle ne peut plus changer, même si le registre global change ensuite."
+          : 'L’état vit dans la base SQLite ; il est lu à chaque exécution. Chaque switch modifie réellement l’état persistant, immédiatement.'}
       </p>
-      {errorMessage !== null && <p className="status-error">{errorMessage}</p>}
-      {tools === null && (
-        <p className="tools-empty">Lecture du catalogue des outils…</p>
+      {catalog.status === 'error' && catalog.errorMessage !== null && (
+        <p className="status-error">{catalog.errorMessage}</p>
       )}
-      {tools !== null && (
+      {loading && <p className="tools-empty">Lecture du catalogue des outils…</p>}
+      {!loading && (
         <ul className="tools-list">
-          {tools.map((tool) => (
-            <li key={tool.tool_name} className="tools-item">
-              <div className="tools-item-text">
-                <span className="tools-item-name">{TOOL_LABELS[tool.tool_name]}</span>
-                <code className="tools-item-slot">{tool.tool_name}</code>
-                <span
-                  className={`tools-badge${tool.enabled ? ' tools-badge--on' : ' tools-badge--off'}`}
-                >
-                  {tool.enabled ? 'Activé' : 'Désactivé'}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => void toggle(tool)}
-                disabled={pendingName === tool.tool_name}
-              >
-                {pendingName === tool.tool_name ? '…' : tool.enabled ? 'Désactiver' : 'Activer'}
-              </button>
-            </li>
-          ))}
+          {displayedTools.map((tool) => {
+            const dependency = TOOL_DEPENDENCY[tool.tool_name]
+            const dependencyUnmet =
+              dependency !== undefined &&
+              !displayedTools.some((t) => t.tool_name === dependency.on && t.enabled)
+            const isPending = catalog.pendingToolName === tool.tool_name
+            const disabled = !interactive || mutating
+            const stateLabel = isPending
+              ? 'Modification…'
+              : tool.enabled
+                ? 'Activé'
+                : 'Désactivé'
+            return (
+              <li key={tool.tool_name} className="tools-item">
+                <div className="tools-item-text">
+                  <span className="tools-item-name">{TOOL_LABELS[tool.tool_name]}</span>
+                  <code className="tools-item-slot">{tool.tool_name}</code>
+                  {tool.description !== '' && (
+                    <span className="tools-item-description">{tool.description}</span>
+                  )}
+                  {dependency !== undefined && (
+                    <span className="tools-item-dependency">{dependency.label}</span>
+                  )}
+                  {dependency !== undefined && dependencyUnmet && tool.enabled && (
+                    <span className="tools-item-dependency-warning">
+                      Prérequis indisponible : l’outil renverra une erreur contrôlée.
+                    </span>
+                  )}
+                </div>
+                <div className="tools-item-control">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={tool.enabled}
+                    aria-label={`${TOOL_LABELS[tool.tool_name]} : ${tool.enabled ? 'activé' : 'désactivé'}`}
+                    className={`tools-switch${tool.enabled ? ' tools-switch--on' : ''}`}
+                    onClick={() => void toggle(tool)}
+                    disabled={disabled}
+                  >
+                    <span className="tools-switch-track">
+                      <span className="tools-switch-thumb" />
+                    </span>
+                  </button>
+                  <span className="tools-item-state" aria-live="polite">
+                    {stateLabel}
+                  </span>
+                </div>
+              </li>
+            )
+          })}
         </ul>
       )}
 
-      <form
-        className="tools-command"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void runCommand(command)
-        }}
-      >
-        <label className="tools-command-label" htmlFor="tools-command-input">
-          Commande outils
-        </label>
-        <div className="tools-command-row">
-          <input
-            id="tools-command-input"
-            name="tools-command"
-            className="tools-command-input"
-            type="text"
-            value={command}
-            onChange={(event) => {
-              setCommand(event.target.value)
-              setErrorMessage(null)
+      {!isFrozen && (
+        <details className="tools-advanced">
+          <summary>Commande avancée</summary>
+          <form
+            className="tools-command"
+            onSubmit={(event) => {
+              event.preventDefault()
+              void runCommand(command)
             }}
-            placeholder="/tools list"
-            autoComplete="off"
-            spellCheck={false}
-          />
-          <button type="submit" disabled={runningCommand || command.trim() === ''}>
-            Exécuter
-          </button>
-        </div>
-      </form>
+          >
+            <label className="tools-command-label" htmlFor="tools-command-input">
+              Commande outils
+            </label>
+            <div className="tools-command-row">
+              <input
+                id="tools-command-input"
+                name="tools-command"
+                className="tools-command-input"
+                type="text"
+                value={command}
+                onChange={(event) => setCommand(event.target.value)}
+                placeholder="/tools list"
+                autoComplete="off"
+                spellCheck={false}
+                disabled={mutating}
+              />
+              <button type="submit" disabled={mutating || command.trim() === ''}>
+                Exécuter
+              </button>
+            </div>
+          </form>
 
-      <div className="tools-help">
-        <div className="tools-help-header">
-          <span>Aide copiable</span>
-          <button type="button" onClick={() => void copyHelp()}>
-            {helpCopied ? 'Copié' : 'Copier'}
-          </button>
-        </div>
-        <pre className="tools-help-code" onClick={() => void copyHelp()}>{TOOLS_HELP}</pre>
-      </div>
-
-      {history.length > 0 && (
-        <ul className="tools-history" aria-label="Dernières confirmations">
-          {history.map((entry, index) => (
-            <li key={entry.key} className="tools-history-item">
-              <span className={`tools-history-action tools-history-action--${entry.action}`}>
-                {entry.action}
-              </span>
-              <span>{entry.message}</span>
-              {index === history.length - 1 && (
-                <span className="tools-history-rectified">
-                  Catalogue mis à jour depuis response.tools
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {tools !== null && (
-        <p className="tools-list-hint">
-          Les boutons envoient <code>/tools enable|disable &lt;nom&gt;</code>&nbsp;; le
-          champ accepte <code>/tools</code>, <code>/tools list</code> et les deux
-          formes précédentes.
-        </p>
+          <div className="tools-help">
+            <div className="tools-help-header">
+              <span>Aide copiable</span>
+              <button type="button" onClick={() => void copyHelp()}>
+                {helpCopied ? 'Copié' : 'Copier'}
+              </button>
+            </div>
+            <pre className="tools-help-code" onClick={() => void copyHelp()}>
+              {TOOLS_HELP}
+            </pre>
+          </div>
+        </details>
       )}
     </section>
   )

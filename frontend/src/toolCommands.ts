@@ -26,6 +26,6 @@ export function reduceToolState(
 
 export const TOOL_LABELS: Record<ToolName, string> = {
   measure_current_document: 'Mesurer le document',
-  find_security_indicators_in_current_document: 'Trouver les indices de sécurité',
-  estimate_current_analysis_cost: 'Estimer le coût',
+  find_security_indicators_in_current_document: 'Rechercher les indicateurs de sécurité',
+  estimate_current_analysis_cost: 'Estimer le coût de l’analyse',
 }

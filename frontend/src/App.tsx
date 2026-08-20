@@ -19,6 +19,7 @@ import {
 import { isTerminalAnalysisStatus, liveExpertRun } from './steps'
 import type { AnalysisStatus } from './types'
 import { useAnalysisController } from './useAnalysisController'
+import { useToolCatalog } from './useToolCatalog'
 import { isNonEmptyTrimmed, MAX_DOCUMENT_LENGTH } from './utils'
 import './App.css'
 
@@ -37,6 +38,7 @@ function statusNotice(status: AnalysisStatus): string | null {
       return 'Analyse échouée : aucun verdict exploitable n’a pu être rendu.'
     case 'interrupted':
       return 'Analyse interrompue par un redémarrage du serveur.'
+    case 'queued':
     case 'running':
       return null
   }
@@ -68,11 +70,19 @@ export default function App() {
   }, [])
 
   const controller = useAnalysisController(analysisId, handleNotFound)
+  const toolCatalog = useToolCatalog()
 
+  const isNew = analysisId === null
+  const snapshot = controller.snapshot
+
+  const catalogReady = toolCatalog.status === 'ready' || toolCatalog.status === 'mutating'
+  const catalogBlocking = toolCatalog.status === 'loading' || toolCatalog.status === 'error'
   const canSubmit =
     submitState.status !== 'submitting' &&
     isNonEmptyTrimmed(document) &&
-    document.length <= MAX_DOCUMENT_LENGTH
+    document.length <= MAX_DOCUMENT_LENGTH &&
+    catalogReady &&
+    !catalogBlocking
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
@@ -103,11 +113,11 @@ export default function App() {
     setAnalysisId(null)
     setNotFoundNotice(null)
     setSubmitState({ status: 'idle' })
+    void toolCatalog.refresh()
   }
 
-  const snapshot = controller.snapshot
-  const isNew = analysisId === null
   const liveResponses = collectLiveResponses(controller.events)
+  const frozenConfiguration = !isNew && snapshot !== null ? snapshot.tool_configuration : null
 
   return (
     <main className="conclave">
@@ -122,6 +132,10 @@ export default function App() {
       </header>
 
       {notFoundNotice !== null && <p className="status-error">{notFoundNotice}</p>}
+
+      <ConclaveStepper snapshot={snapshot} events={controller.events} />
+
+      <ToolsPanel catalog={toolCatalog} frozenConfiguration={frozenConfiguration} />
 
       {isNew && (
         <section className="submit-panel" aria-label="Soumettre un document">
@@ -156,8 +170,6 @@ export default function App() {
 
       {!isNew && (
         <>
-          <ConclaveStepper snapshot={snapshot} events={controller.events} />
-
           {snapshot === null && controller.connection.status === 'loading' && (
             <p className="status-loading">Chargement de l’analyse persistée…</p>
           )}
@@ -215,8 +227,6 @@ export default function App() {
                   <ArbiterLivePanel live={liveResponses.arbitre} />
                 )
               )}
-
-              <ToolsPanel />
 
               <DebugPanel
                 events={controller.events}
