@@ -134,10 +134,47 @@ export type AnalysisEventType =
   | 'arbiter.started'
   | 'arbiter.completed'
   | 'arbiter.failed'
+  | 'agent.response.started'
+  | 'agent.response.delta'
+  | 'agent.response.completed'
+  | 'agent.response.failed'
   | 'analysis.completed'
   | 'analysis.degraded'
   | 'analysis.failed'
   | 'analysis.interrupted'
+
+export type AgentResponseStartedPayload = Record<string, unknown> & {
+  analysis_id: string
+  role: AgentRole
+}
+
+export type AgentResponseDeltaPayload = Record<string, unknown> & {
+  analysis_id: string
+  role: AgentRole
+  sequence: number
+  delta: string
+}
+
+export type AgentResponseCompletedPayload = Record<string, unknown> & {
+  analysis_id: string
+  role: AgentRole
+}
+
+export type AgentResponseFailedPayload = Record<string, unknown> & {
+  analysis_id: string
+  role: AgentRole
+  error_code: string
+}
+
+export type LiveResponseStatus = 'idle' | 'streaming' | 'completed' | 'failed'
+
+export interface LiveResponseView {
+  role: AgentRole
+  status: LiveResponseStatus
+  text: string
+  lastSequence: number
+  errorCode: string | null
+}
 
 export interface AnalysisEvent {
   id: number
@@ -161,8 +198,11 @@ export interface ToolCatalogResponse {
 }
 
 export interface ToolCommandResponse {
-  tool_name: ToolName
-  enabled: boolean
+  action: 'list' | 'enable' | 'disable'
+  message: string
+  tool_name: ToolName | null
+  enabled: boolean | null
+  tools: ToolState[]
 }
 
 export type ApiError =

@@ -1,11 +1,13 @@
 import { useCallback, useState, type FormEvent } from 'react'
 import { createAnalysis } from './api/client'
+import { ArbiterLivePanel } from './components/ArbiterLivePanel'
 import { ConclaveStepper } from './components/ConclaveStepper'
 import { DebugPanel } from './components/DebugPanel'
 import { ExpertColumn } from './components/ExpertColumn'
 import { ToolsPanel } from './components/ToolsPanel'
 import { VerdictPanel } from './components/VerdictPanel'
 import { httpStatusOf, toErrorMessage } from './errors'
+import { collectLiveResponses } from './liveResponses'
 import {
   analysisIdFromUrl,
   buildUrlWithAnalysisId,
@@ -105,6 +107,7 @@ export default function App() {
 
   const snapshot = controller.snapshot
   const isNew = analysisId === null
+  const liveResponses = collectLiveResponses(controller.events)
 
   return (
     <main className="conclave">
@@ -181,6 +184,7 @@ export default function App() {
               <section className="experts" aria-label="Les trois experts">
                 <ExpertColumn
                   role="avocat"
+                  live={liveResponses.avocat}
                   run={{
                     ...snapshot.avocat,
                     ...liveExpertRun(snapshot.avocat, controller.events),
@@ -188,6 +192,7 @@ export default function App() {
                 />
                 <ExpertColumn
                   role="procureur"
+                  live={liveResponses.procureur}
                   run={{
                     ...snapshot.procureur,
                     ...liveExpertRun(snapshot.procureur, controller.events),
@@ -195,6 +200,7 @@ export default function App() {
                 />
                 <ExpertColumn
                   role="comptable"
+                  live={liveResponses.comptable}
                   run={{
                     ...snapshot.comptable,
                     ...liveExpertRun(snapshot.comptable, controller.events),
@@ -202,7 +208,13 @@ export default function App() {
                 />
               </section>
 
-              {snapshot.verdict !== null && <VerdictPanel verdict={snapshot.verdict} />}
+              {snapshot.verdict !== null ? (
+                <VerdictPanel verdict={snapshot.verdict} />
+              ) : (
+                liveResponses.arbitre.status !== 'idle' && (
+                  <ArbiterLivePanel live={liveResponses.arbitre} />
+                )
+              )}
 
               <ToolsPanel />
 
