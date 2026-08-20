@@ -286,6 +286,50 @@ async def insert_analysis_event(
     return int(cursor.lastrowid)
 
 
+async def finish_analysis(
+    conn: aiosqlite.Connection,
+    analysis_id: str,
+    *,
+    status: str,
+    error_code: str | None,
+    completed_at: str,
+    usage_json: str,
+    verdict_json: str | None,
+    event_type: str,
+    event_payload: dict[str, Any],
+) -> int:
+    """Termine une analyse atomiquement : statut + usage + verdict + événement
+    terminal dans UNE transaction. Évite la fenêtre où le statut est terminal
+    mais l'événement terminal pas encore persisté (le SSE ne doit jamais voir
+    un statut terminal sans son événement)."""
+    import json
+
+    await conn.execute(
+        "UPDATE analyses SET status = ?, completed_at = ?, error_code = ?, "
+        "usage_json = ?, verdict_json = ? WHERE id = ?",
+        (
+            status,
+            completed_at,
+            error_code,
+            usage_json,
+            verdict_json,
+            analysis_id,
+        ),
+    )
+    cursor = await conn.execute(
+        "INSERT INTO analysis_events (analysis_id, event_type, payload_json, created_at) "
+        "VALUES (?, ?, ?, ?)",
+        (
+            analysis_id,
+            event_type,
+            json.dumps(event_payload, ensure_ascii=False),
+            completed_at,
+        ),
+    )
+    await conn.commit()
+    return int(cursor.lastrowid)
+
+
 async def insert_tool_event(
     conn: aiosqlite.Connection,
     *,

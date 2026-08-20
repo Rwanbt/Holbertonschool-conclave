@@ -35,6 +35,10 @@ from .config import Settings
 from .llm import build_client
 from .schemas import (
     AgentOutput,
+    AgentResponseCompleted,
+    AgentResponseDelta,
+    AgentResponseFailed,
+    AgentResponseStarted,
     ArbiterVerdict,
     ExecutionUsage,
     ExpertRole,
@@ -42,6 +46,18 @@ from .schemas import (
 )
 
 EXPERT_ROLES: tuple[ExpertRole, ...] = ("avocat", "procureur", "comptable")
+
+_EXPERT_ENVELOPE: str = (
+    "Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement "
+    "avec l'enveloppe suivante : "
+    "<LIVE_RESPONSE> ton raisonnement final de conclusion en francais, bref, lisible, "
+    "sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin "
+    "</LIVE_RESPONSE> puis "
+    "<FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema AgentOutput : role, summary, "
+    "findings (2 a 5 elements avec title, evidence, impact, priority low|medium|high), "
+    "score_label, score (0-100), recommendations (0 a 3), unavailable_tools </FINAL_JSON>. "
+    "Aucun texte hors de ces deux balises."
+)
 
 SYSTEM_PROMPTS: dict[ExpertRole, str] = {
     "avocat": (
@@ -53,10 +69,7 @@ SYSTEM_PROMPTS: dict[ExpertRole, str] = {
         "tour à tour. "
         "Rédige une plaidoirie de la solution proposée par le document, en t'appuyant "
         "sur des faits vérifiables. "
-        "Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma "
-        "AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence, "
-        "impact, priority low|medium|high), score_label, score (0-100), "
-        "recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON."
+        + _EXPERT_ENVELOPE
     ),
     "procureur": (
         "Tu es l'expert PROCUREUR de l'analyse documentaire CONCLAVE. "
@@ -67,10 +80,7 @@ SYSTEM_PROMPTS: dict[ExpertRole, str] = {
         "tour à tour. "
         "Démontre les risques, faiblesses et objections que le document soulève, "
         "en t'appuyant sur des faits vérifiables. "
-        "Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma "
-        "AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence, "
-        "impact, priority low|medium|high), score_label, score (0-100), "
-        "recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON."
+        + _EXPERT_ENVELOPE
     ),
     "comptable": (
         "Tu es l'expert COMPTABLE de l'analyse documentaire CONCLAVE. "
@@ -82,12 +92,21 @@ SYSTEM_PROMPTS: dict[ExpertRole, str] = {
         "Tu ne produis JAMAIS une conclusion chiffrée sans avoir observé les métriques "
         "réelles ni une estimation de coût sans données réelles : si ces mesures "
         "manquent, tu le signales dans summary et findings sans inventer de valeur. "
-        "Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma "
-        "AgentOutput : role, summary, findings (2 a 5 elements avec title, evidence, "
-        "impact, priority low|medium|high), score_label, score (0-100), "
-        "recommendations (0 a 3), unavailable_tools. Pas de texte hors du JSON."
+        + _EXPERT_ENVELOPE
     ),
 }
+
+_ARBITER_ENVELOPE: str = (
+    "Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement "
+    "avec l'enveloppe suivante : "
+    "<LIVE_RESPONSE> ton raisonnement final de decision en francais, bref, lisible, "
+    "sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin "
+    "</LIVE_RESPONSE> puis "
+    "<FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema ArbiterVerdict : decision "
+    "(go|go_with_conditions|no_go), score (0-100), main_disagreement, priority_risks "
+    "(0 a 3), actions (0 a 3), accepted_tradeoff, unavailable_agents </FINAL_JSON>. "
+    "Aucun texte hors de ces deux balises."
+)
 
 ARBITER_SYSTEM_PROMPT: str = (
     "Tu es l'ARBITRE de l'analyse documentaire CONCLAVE. "
@@ -96,10 +115,7 @@ ARBITER_SYSTEM_PROMPT: str = (
     "Tu peux aussi utiliser les outils serveur sans argument si tu dois vérifier "
     "un chiffre, mais ce n'est pas obligatoire. "
     "Départage les désaccords, puis rends une décision finale. "
-    "Réponds à la toute fin avec UNIQUEMENT un objet JSON conforme au schéma "
-    "ArbiterVerdict : decision (go|go_with_conditions|no_go), score (0-100), "
-    "main_disagreement, priority_risks (0 a 3), actions (0 a 3), accepted_tradeoff, "
-    "unavailable_agents. Pas de texte hors du JSON."
+    + _ARBITER_ENVELOPE
 )
 
 AgentOutputValidator = Callable[[str, dict[str, Any]], AgentOutput]
@@ -278,6 +294,26 @@ async def run_expert(
                 conn, analysis_id, event_type, payload, db.utc_now_iso()
             )
 
+    response_sequences: dict[str, int] = {}
+
+    async def response_sink(kind: str, fields: dict[str, Any]) -> None:
+        payload: dict[str, Any] = {"analysis_id": analysis_id, "role": role}
+        now = db.utc_now_iso()
+        if kind == "agent.response.delta":
+            response_sequences[role] = response_sequences.get(role, 0) + 1
+            payload["sequence"] = response_sequences[role]
+            payload["delta"] = fields["delta"]
+            AgentResponseDelta(**payload)
+        elif kind == "agent.response.started":
+            AgentResponseStarted(**payload)
+        elif kind == "agent.response.completed":
+            AgentResponseCompleted(**payload)
+        elif kind == "agent.response.failed":
+            payload["error_code"] = fields.get("error_code", "protocol_error")
+            AgentResponseFailed(**payload)
+        async with (await get_connection()) as conn:
+            await db.insert_analysis_event(conn, analysis_id, kind, payload, now)
+
     async def sink(kind: str, fields: dict[str, Any]) -> None:
         now = db.utc_now_iso()
         async with (await get_connection()) as conn:
@@ -351,6 +387,8 @@ async def run_expert(
             agent_role=role,
             get_connection=get_connection,
             max_output_tokens=settings.expert_max_output_tokens,
+            response_event_sink=response_sink,
+            stream_final_envelope=True,
         )
 
     try:
@@ -359,6 +397,9 @@ async def run_expert(
         )
     except asyncio.TimeoutError:
         await emit("expert.timeout", {"analysis_id": analysis_id, "role": role})
+        await response_sink(
+            "agent.response.failed", {"role": role, "error_code": "expert_timeout"}
+        )
         async with (await get_connection()) as conn:
             await db.upsert_expert_run(
                 conn,
@@ -450,6 +491,7 @@ async def run_expert(
                 started_at=started_at,
                 completed_at=db.utc_now_iso(),
             )
+        await response_sink("agent.response.completed", {"role": role})
         await emit(
             "expert.completed",
             {"analysis_id": analysis_id, "role": role},
@@ -467,6 +509,9 @@ async def run_expert(
                 started_at=started_at,
                 completed_at=db.utc_now_iso(),
             )
+        await response_sink(
+            "agent.response.failed", {"role": role, "error_code": error_code}
+        )
         await emit(
             "expert.failed",
             {"analysis_id": analysis_id, "role": role, "error_code": error_code},
@@ -499,6 +544,26 @@ async def run_arbiter(
             await db.insert_analysis_event(
                 conn, analysis_id, event_type, payload, db.utc_now_iso()
             )
+
+    response_sequences: dict[str, int] = {}
+
+    async def response_sink(kind: str, fields: dict[str, Any]) -> None:
+        payload: dict[str, Any] = {"analysis_id": analysis_id, "role": "arbitre"}
+        now = db.utc_now_iso()
+        if kind == "agent.response.delta":
+            response_sequences["arbitre"] = response_sequences.get("arbitre", 0) + 1
+            payload["sequence"] = response_sequences["arbitre"]
+            payload["delta"] = fields["delta"]
+            AgentResponseDelta(**payload)
+        elif kind == "agent.response.started":
+            AgentResponseStarted(**payload)
+        elif kind == "agent.response.completed":
+            AgentResponseCompleted(**payload)
+        elif kind == "agent.response.failed":
+            payload["error_code"] = fields.get("error_code", "protocol_error")
+            AgentResponseFailed(**payload)
+        async with (await get_connection()) as conn:
+            await db.insert_analysis_event(conn, analysis_id, kind, payload, now)
 
     async def sink(kind: str, fields: dict[str, Any]) -> None:
         now = db.utc_now_iso()
@@ -581,6 +646,8 @@ async def run_arbiter(
             agent_role="arbitre",
             get_connection=get_connection,
             max_output_tokens=settings.expert_max_output_tokens,
+            response_event_sink=response_sink,
+            stream_final_envelope=True,
         )
 
     try:
@@ -591,6 +658,9 @@ async def run_arbiter(
         await emit(
             "arbiter.failed",
             {"analysis_id": analysis_id, "error_code": "arbiter_timeout"},
+        )
+        await response_sink(
+            "agent.response.failed", {"role": "arbitre", "error_code": "arbiter_timeout"}
         )
         return None, _empty_usage()
 
@@ -627,11 +697,16 @@ async def run_arbiter(
                         verdict = None
 
     if verdict is not None:
+        await response_sink("agent.response.completed", {"role": "arbitre"})
         await emit(
             "arbiter.completed",
             {"analysis_id": analysis_id, "decision": verdict.decision},
         )
     else:
+        await response_sink(
+            "agent.response.failed",
+            {"role": "arbitre", "error_code": "structured_output_error"},
+        )
         await emit(
             "arbiter.failed",
             {"analysis_id": analysis_id, "error_code": "structured_output_error"},
@@ -737,29 +812,25 @@ async def run_analysis(
     completed_at = db.utc_now_iso()
 
     async with (await get_connection()) as conn:
-        await db.set_analysis_status(
-            conn, analysis_id, status, completed_at=completed_at, error_code=error_code
-        )
-        await db.set_analysis_usage(conn, analysis_id, merged.model_dump_json())
-        if verdict is not None:
-            await db.set_analysis_verdict(
-                conn, analysis_id, verdict.model_dump_json()
-            )
         event_type = {
             "completed": "analysis.completed",
             "degraded": "analysis.degraded",
             "failed": "analysis.failed",
         }[status]
-        await db.insert_analysis_event(
+        await db.finish_analysis(
             conn,
             analysis_id,
-            event_type,
-            {
+            status=status,
+            error_code=error_code,
+            completed_at=completed_at,
+            usage_json=merged.model_dump_json(),
+            verdict_json=verdict.model_dump_json() if verdict is not None else None,
+            event_type=event_type,
+            event_payload={
                 "analysis_id": analysis_id,
                 "status": status,
                 "error_code": error_code,
             },
-            completed_at,
         )
 
     return AnalysisResult(
