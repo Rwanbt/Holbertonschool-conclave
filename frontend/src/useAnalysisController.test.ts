@@ -1,6 +1,6 @@
 import { renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useAnalysisController } from './useAnalysisController'
+import { START_FALLBACK_MS, useAnalysisController } from './useAnalysisController'
 import type { AnalysisSnapshot, EventsHistoryResponse } from './types'
 
 function baseSnapshot(overrides: Partial<AnalysisSnapshot> = {}): AnalysisSnapshot {
@@ -163,6 +163,32 @@ describe('useAnalysisController', () => {
     expect(
       fetchMock.mock.calls.some(([u]) => String(u).endsWith('/start')),
     ).toBe(false)
+  })
+
+  it('démarre quand même l’analyse si le flux SSE ne s’ouvre jamais', async () => {
+    // Filet de sécurité : sans lui, une analyse restait `queued` pour
+    // toujours dès que `onopen` n'arrivait pas (proxy, limite de connexions),
+    // et l'application paraissait figée sans aucune erreur.
+    const snapshot = baseSnapshot({ status: 'queued' })
+    const fetchMock = routeFetch(snapshot, emptyHistory())
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderHook(() => useAnalysisController('a1'))
+
+    // Le flux est bien ouvert, mais `onopen` n'est JAMAIS déclenché.
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    const startCalls = () =>
+      fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/start')).length
+    expect(startCalls()).toBe(0)
+
+    await waitFor(() => expect(startCalls()).toBe(1), {
+      timeout: START_FALLBACK_MS + 2000,
+    })
+
+    // Et si `onopen` finit par arriver, il ne redémarre pas une deuxième fois.
+    FakeEventSource.instances[0].triggerOpen()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(startCalls()).toBe(1)
   })
 
   it('reprend le flux après le dernier identifiant hydraté (analyse running rechargée)', async () => {

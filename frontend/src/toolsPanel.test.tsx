@@ -110,6 +110,23 @@ describe('ToolsPanel', () => {
     ).toBeInTheDocument()
   })
 
+  it('catalogue indisponible : message explicite plutôt qu’une liste vide muette', () => {
+    // Sans ce cas, un backend injoignable rendait une <ul> vide : aucun
+    // switch visible, et rien n'expliquait pourquoi.
+    render(
+      <ToolsPanel
+        catalog={catalogFixture({
+          status: 'error',
+          tools: [],
+          errorMessage: 'Impossible de joindre le backend.',
+        })}
+      />,
+    )
+    expect(screen.queryAllByRole('switch')).toHaveLength(0)
+    expect(screen.getByText(/Catalogue des outils indisponible/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Actualiser' })).toBeInTheDocument()
+  })
+
   it('affiche l’indication de dépendance du coût envers la mesure', () => {
     render(<ToolsPanel catalog={catalogFixture()} />)
     expect(screen.getByText('Nécessite Mesurer le document')).toBeInTheDocument()
