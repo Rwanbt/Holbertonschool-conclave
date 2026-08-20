@@ -162,6 +162,40 @@ class TestSse:
         assert resumed[0]["id"] > full[0]["id"]
         assert resumed[-1]["event"] == full[-1]["event"]
 
+    def test_resume_uses_max_of_last_event_id_and_after(self, client) -> None:
+        test_client, _ = client
+        analysis_id = test_client.post("/api/analyses", json={"document": DOC}).json()[
+            "analysis_id"
+        ]
+        with test_client.stream("GET", f"/api/analyses/{analysis_id}/events") as response:
+            full = _parse_sse("".join(response.iter_text()))
+        # header = full[1]["id"], after = full[0]["id"] -> reprise depuis max = full[1]
+        with test_client.stream(
+            "GET",
+            f"/api/analyses/{analysis_id}/events?after={full[0]['id']}",
+            headers={"Last-Event-ID": str(full[1]["id"])},
+        ) as response:
+            resumed = _parse_sse("".join(response.iter_text()))
+        assert resumed[0]["id"] > full[1]["id"]
+
+    def test_replay_contains_streaming_deltas_in_order(self, client) -> None:
+        test_client, _ = client
+        analysis_id = test_client.post("/api/analyses", json={"document": DOC}).json()[
+            "analysis_id"
+        ]
+        with test_client.stream("GET", f"/api/analyses/{analysis_id}/events") as response:
+            events = _parse_sse("".join(response.iter_text()))
+        deltas = [e for e in events if e["event"] == "agent.response.delta"]
+        assert deltas
+        by_role: dict[str, list[int]] = {}
+        for delta in deltas:
+            by_role.setdefault(delta["data"]["role"], []).append(delta["data"]["sequence"])
+        assert all(seq == sorted(seq) for seq in by_role.values())
+        assert all(len(e["data"]["delta"]) >= 1 for e in deltas)
+        assert all(e["data"]["role"] in {"avocat", "procureur", "comptable", "arbitre"} for e in deltas)
+        ids = [e["id"] for e in events]
+        assert ids == sorted(ids)
+
 
 class TestToolCommands:
     def test_catalog_returns_three_tools(self, client) -> None:
@@ -218,6 +252,36 @@ class TestToolCommands:
             tool["enabled"]
             for tool in test_client.get("/api/tools").json()["tools"]
         )
+
+    def test_post_tools_list_returns_catalog(self, client) -> None:
+        test_client, _ = client
+        body = test_client.post(
+            "/api/tool-commands", json={"command": "/tools list"}
+        ).json()
+        assert body["action"] == "list"
+        assert body["message"]
+        assert body["tool_name"] is None
+        assert body["enabled"] is None
+        assert len(body["tools"]) == 3
+
+    def test_post_tools_bare_returns_catalog(self, client) -> None:
+        test_client, _ = client
+        body = test_client.post(
+            "/api/tool-commands", json={"command": "/tools"}
+        ).json()
+        assert body["action"] == "list"
+        assert len(body["tools"]) == 3
+
+    def test_enable_returns_action_and_full_catalog(self, client) -> None:
+        test_client, _ = client
+        body = test_client.post(
+            "/api/tool-commands",
+            json={"command": "/tools enable measure_current_document"},
+        ).json()
+        assert body["action"] == "enable"
+        assert body["tool_name"] == "measure_current_document"
+        assert body["enabled"] is True
+        assert len(body["tools"]) == 3
 
 
 class TestDisabledToolDuringAnalysis:

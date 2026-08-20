@@ -61,16 +61,102 @@ class FakeCompletion:
         self.usage = usage
 
 
+class FakeStreamDelta:
+    def __init__(self, content=None, tool_calls=None):
+        self.content = content
+        self.tool_calls = tool_calls
+
+
+class FakeStreamChoice:
+    def __init__(self, delta, finish_reason=None):
+        self.delta = delta
+        self.finish_reason = finish_reason
+
+
+class FakeStreamToolCall:
+    def __init__(self, index, call_id=None, name=None, arguments=None):
+        self.index = index
+        self.id = call_id
+        self.function = FakeFunction(name or "", arguments or "")
+
+
+class FakeStreamChunk:
+    """Morceau de stream OpenAI : `content`/`tool_calls` dans le delta + usage."""
+
+    def __init__(self, content=None, tool_calls=None, usage=None, finish_reason=None):
+        self.choices = []
+        if content or tool_calls:
+            self.choices.append(
+                FakeStreamChoice(
+                    FakeStreamDelta(content=content, tool_calls=tool_calls),
+                    finish_reason,
+                )
+            )
+        self.usage = usage
+
+
+class FakeStream:
+    def __init__(self, chunks):
+        self._chunks = list(chunks)
+
+    def __aiter__(self):
+        async def _gen():
+            for chunk in self._chunks:
+                yield chunk
+
+        return _gen()
+
+
+def _completion_to_stream(completion: FakeCompletion) -> FakeStream:
+    """Convertit une réponse non-streamée en stream d'un seul morceau.
+
+    La réponse est reconstituée à l'identique : contenu (enveloppe) et appels
+    d'outil par index, puis un chunk final `choices=[]` porteur de l'usage.
+    """
+    chunks: list[FakeStreamChunk] = []
+    if completion.choices:
+        message = completion.choices[0].message
+        tool_calls = message.tool_calls or []
+        if tool_calls:
+            for index, call in enumerate(tool_calls):
+                last = index == len(tool_calls) - 1
+                chunks.append(
+                    FakeStreamChunk(
+                        tool_calls=[
+                            FakeStreamToolCall(
+                                index,
+                                call_id=call.id,
+                                name=call.function.name,
+                                arguments=call.function.arguments,
+                            )
+                        ],
+                        finish_reason="tool_calls" if last else None,
+                    )
+                )
+        else:
+            chunks.append(
+                FakeStreamChunk(
+                    content=message.content or "",
+                    finish_reason="stop",
+                )
+            )
+    chunks.append(FakeStreamChunk(usage=completion.usage))
+    return FakeStream(chunks)
+
+
 class FakeClient:
-    """Client scripté par rôle avec support des réparations."""
+    """Client scripté par rôle avec support des réparations et du streaming."""
 
     def __init__(
         self,
-        scripts: dict[str, list[FakeCompletion]],
+        scripts: dict[str, list[FakeCompletion] | FakeStream],
         repairs: list[FakeCompletion] | None = None,
     ):
         self.chat = _FakeChat(self)
-        self._scripts = {key: list(value) for key, value in scripts.items()}
+        self._scripts = {
+            key: list(value) if isinstance(value, (list, tuple)) else [value]
+            for key, value in scripts.items()
+        }
         self._repairs = list(repairs or [])
         self.created_messages: list[list[dict[str, Any]]] = []
 
@@ -121,12 +207,15 @@ class _FakeCompletions:
     async def create(self, **kwargs):
         messages = kwargs.get("messages", [])
         try:
-            return self._owner.next_response(messages)
+            response = self._owner.next_response(messages)
         except _Hang:
             import asyncio
 
             await asyncio.sleep(3600)
             raise AssertionError("unreachable")
+        if kwargs.get("stream", False) and isinstance(response, FakeCompletion):
+            return _completion_to_stream(response)
+        return response
 
 
 class _FakeChat:
@@ -202,8 +291,24 @@ def verdict_json(**overrides: Any) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
+def envelope(final_content: str, live: str = "Analyse terminée : conclusion ci-après.") -> str:
+    """Enveloppe de réponse finale : texte live puis objet JSON exact."""
+    return (
+        "<LIVE_RESPONSE>\n"
+        + live
+        + "\n</LIVE_RESPONSE>\n"
+        "<FINAL_JSON>\n"
+        + final_content
+        + "\n</FINAL_JSON>"
+    )
+
+
 def final_completion(content: str, prompt: int = 30, completion: int = 40) -> FakeCompletion:
-    return FakeCompletion([FakeChoice(FakeMessage(content=content))], FakeUsage(prompt, completion))
+    """Réponse finale conforme : contenu enveloppé dans <LIVE_RESPONSE>/<FINAL_JSON>."""
+    return FakeCompletion(
+        [FakeChoice(FakeMessage(content=envelope(content)))],
+        FakeUsage(prompt, completion),
+    )
 
 
 def scripted_experts(comptable_extra: list[FakeCompletion] | None = None) -> dict[str, list[FakeCompletion]]:
