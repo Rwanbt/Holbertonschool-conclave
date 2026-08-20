@@ -119,6 +119,7 @@ class AgentResponse(BaseModel):
 AnalysisStatus = Literal["running", "completed", "degraded", "failed", "interrupted"]
 ExpertStatus = Literal["pending", "running", "completed", "error", "timeout"]
 ExpertRole = Literal["avocat", "procureur", "comptable"]
+ResponseRole = Literal["avocat", "procureur", "comptable", "arbitre"]
 
 
 class AnalysisCreateRequest(BaseModel):
@@ -236,8 +237,47 @@ class ToolCommandRequest(BaseModel):
 
 
 class ToolCommandResponse(BaseModel):
-    tool_name: ToolName = Field(..., description="Outil concerné par la commande.")
-    enabled: bool = Field(..., description="État après application, idempotent.")
+    action: Literal["list", "enable", "disable"] = Field(
+        ..., description="Action appliquée par la commande."
+    )
+    message: str = Field(..., description="Message humain court décrivant le résultat.")
+    tool_name: ToolName | None = Field(
+        None,
+        description="Outil concerné (enable/disable), null pour une simple liste.",
+    )
+    enabled: bool | None = Field(
+        None,
+        description="État après application (enable/disable), null pour une simple liste.",
+    )
+    tools: list[ToolState] = Field(
+        default_factory=list,
+        description="Catalogue complet des outils et de leurs états persistés.",
+    )
+
+
+class AgentResponseStarted(BaseModel):
+    analysis_id: str = Field(..., description="Identifiant de l'analyse.")
+    role: ResponseRole = Field(..., description="Rôle dont la réponse commence à défiler.")
+
+
+class AgentResponseDelta(BaseModel):
+    analysis_id: str = Field(..., description="Identifiant de l'analyse.")
+    role: ResponseRole = Field(..., description="Rôle qui diffuse le texte live.")
+    sequence: int = Field(..., ge=1, description="Numéro strictement croissant par rôle.")
+    delta: str = Field(..., min_length=1, description="Fragment de texte live, borné en taille.")
+
+
+class AgentResponseCompleted(BaseModel):
+    analysis_id: str = Field(..., description="Identifiant de l'analyse.")
+    role: ResponseRole = Field(..., description="Rôle dont la sortie a été validée.")
+
+
+class AgentResponseFailed(BaseModel):
+    analysis_id: str = Field(..., description="Identifiant de l'analyse.")
+    role: ResponseRole = Field(..., description="Rôle dont la réponse a échoué.")
+    error_code: str = Field(
+        ..., min_length=1, description="Code d'échec (protocol_error, structured_output_error…)."
+    )
 
 
 class ToolEventData(BaseModel):
