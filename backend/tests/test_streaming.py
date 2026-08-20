@@ -84,6 +84,16 @@ class TestNormalizeDelta:
             accumulated += normalize_delta(accumulated, chunk)
         assert accumulated == "Bonjour "
 
+    def test_legitimate_repeated_substring_is_not_dropped(self) -> None:
+        # "monde" réapparaît plus loin dans le texte : ce n'est ni un
+        # cumulatif ni un préfixe répété, donc ce n'est PAS un doublon à
+        # supprimer (l'ancienne règle générale `buffer.endswith(incoming)`
+        # l'aurait effacé à tort).
+        assert normalize_delta("le monde et le", " monde") == " monde"
+
+    def test_repeated_space_is_not_dropped(self) -> None:
+        assert normalize_delta("Bonjour ", " ") == " "
+
 
 class TestEnvelopeParser:
     def test_simple_envelope(self) -> None:
@@ -132,6 +142,24 @@ class TestEnvelopeParser:
         parser.feed("réponse d'un round d'outil sans balise")
         assert parser.finish() is None
         assert parser.final_json is None
+
+    def test_final_json_only_without_live_is_a_protocol_error(self) -> None:
+        # R1 : une réponse finale JSON-only ne peut plus terminer avec zéro
+        # événement live sans erreur (défaut 2.1 du plan corrigé).
+        parser = EnvelopeParser(max_live_chars=1000)
+        parser.feed("<FINAL_JSON>{}</FINAL_JSON>")
+        assert parser.finish() is not None
+        assert parser.final_json == "{}"
+
+    def test_empty_live_section_is_a_protocol_error(self) -> None:
+        parser = EnvelopeParser(max_live_chars=1000)
+        parser.feed("<LIVE_RESPONSE></LIVE_RESPONSE><FINAL_JSON>{}</FINAL_JSON>")
+        assert parser.finish() is not None
+
+    def test_whitespace_only_live_section_is_a_protocol_error(self) -> None:
+        parser = EnvelopeParser(max_live_chars=1000)
+        parser.feed("<LIVE_RESPONSE>   </LIVE_RESPONSE><FINAL_JSON>{}</FINAL_JSON>")
+        assert parser.finish() is not None
 
 
 class TestStreamCollector:
@@ -210,8 +238,8 @@ class TestStreamCollector:
 
 
 class TestAgentLoopStreaming:
-    def _patched_loop(self, monkeypatch, stream, max_rounds=2):
-        client = FakeClient({"avocat": stream})
+    def _patched_loop(self, monkeypatch, stream, max_rounds=2, repairs=None):
+        client = FakeClient({"avocat": stream}, repairs=repairs)
         monkeypatch.setattr(agent, "build_client", lambda settings: client)
         events: list[tuple[str, dict]] = []
 
@@ -259,13 +287,23 @@ class TestAgentLoopStreaming:
             if kind == "agent.response.delta":
                 assert "FINAL_JSON" not in fields["delta"]
 
-    def test_protocol_error_stops_cleanly_without_answer(self, monkeypatch) -> None:
+    def test_protocol_error_stops_cleanly_without_answer_after_failed_repair(
+        self, monkeypatch
+    ) -> None:
         stream = FakeStream([FakeStreamChunk(content="<LIVE_RESPONSE>texte seul</LIVE_RESPONSE>")])
-        result, events, client = self._patched_loop(monkeypatch, stream)
+        # La réparation unique échoue aussi (toujours pas de FINAL_JSON) :
+        # la boucle s'arrête proprement, sans deuxième tentative.
+        repair_stream = FakeStream(
+            [FakeStreamChunk(content="<LIVE_RESPONSE>encore rien</LIVE_RESPONSE>")]
+        )
+        result, events, client = self._patched_loop(
+            monkeypatch, stream, repairs=[repair_stream]
+        )
         assert result.stop_reason == "protocol_error"
         assert result.answer is None
-        assert result.live_text == "\ntexte seul" or "texte seul" in result.live_text
+        assert "encore rien" in result.live_text
         assert events[0][0] == "agent.response.started"
+        assert client._repairs == []
 
     def test_tool_round_with_filler_text_emits_no_live_events(self, monkeypatch) -> None:
         tool_stream = FakeStream(
@@ -291,18 +329,48 @@ class TestAgentLoopStreaming:
         assert "agent.response.delta" in kinds
         assert len(events) <= 3  # started + 1 delta maximum (conclusion courte)
 
-    def test_final_json_only_round_without_live_is_valid(self, monkeypatch) -> None:
+    def test_final_json_only_round_without_live_triggers_repair_then_succeeds(
+        self, monkeypatch
+    ) -> None:
+        # R1 : un tour JSON-only (zéro texte live) n'est plus valide tel
+        # quel — il déclenche UNE réparation ; si elle respecte l'enveloppe,
+        # la boucle réussit normalement et le live n'est plus vide.
+        payload = agent_output_json("avocat")
         stream = FakeStream(
+            [FakeStreamChunk(content="<FINAL_JSON>\n" + payload + "\n</FINAL_JSON>")]
+        )
+        repair_stream = FakeStream(
             [
                 FakeStreamChunk(
-                    content="<FINAL_JSON>\n" + agent_output_json("avocat") + "\n</FINAL_JSON>"
+                    content="<LIVE_RESPONSE>Conclusion corrigée</LIVE_RESPONSE>"
+                    "<FINAL_JSON>" + payload + "</FINAL_JSON>"
                 )
             ]
         )
-        result, events, _ = self._patched_loop(monkeypatch, stream)
+        result, events, client = self._patched_loop(
+            monkeypatch, stream, repairs=[repair_stream]
+        )
         assert result.stop_reason is None
         assert json.loads(result.answer)["role"] == "avocat"
-        assert events == []
+        assert result.live_text == "Conclusion corrigée"
+        assert any(kind == "agent.response.delta" for kind, _ in events)
+        assert client._repairs == []
+
+    def test_final_json_only_round_without_live_fails_after_failed_repair(
+        self, monkeypatch
+    ) -> None:
+        payload = agent_output_json("avocat")
+        stream = FakeStream(
+            [FakeStreamChunk(content="<FINAL_JSON>\n" + payload + "\n</FINAL_JSON>")]
+        )
+        repair_stream = FakeStream(
+            [FakeStreamChunk(content="<FINAL_JSON>" + payload + "</FINAL_JSON>")]
+        )
+        result, events, _ = self._patched_loop(
+            monkeypatch, stream, repairs=[repair_stream]
+        )
+        assert result.stop_reason == "protocol_error"
+        assert result.answer is None
 
 
 class TestResponseEventsPersisted:
@@ -355,7 +423,10 @@ class TestResponseEventsPersisted:
     def test_failed_response_event_when_protocol_error(self, tmp_path, monkeypatch) -> None:
         settings = _settings(tmp_path)
         stream = FakeStream([FakeStreamChunk(content="<LIVE_RESPONSE>texte seul</LIVE_RESPONSE>")])
-        client = FakeClient({"avocat": stream})
+        repair_stream = FakeStream(
+            [FakeStreamChunk(content="<LIVE_RESPONSE>toujours rien</LIVE_RESPONSE>")]
+        )
+        client = FakeClient({"avocat": stream}, repairs=[repair_stream])
         monkeypatch.setattr(experts, "build_client", lambda settings: client)
         monkeypatch.setattr(agent, "build_client", lambda settings: client)
 
@@ -390,7 +461,15 @@ class TestResponseEventsPersisted:
 
 class TestReplayAndToolsList:
     def test_analysis_with_streaming_events_completes(self, tmp_path, monkeypatch) -> None:
-        settings = _settings(tmp_path)
+        # Tarifs non nuls requis : sans eux, estimate_current_analysis_cost
+        # échoue (UnknownPricingError) et le comptable ne peut jamais
+        # conclure une preuve chiffrée complète (bug préexistant, hors R1,
+        # révélé ici en fixant les tarifs pour tester le chemin nominal).
+        settings = _settings(
+            tmp_path,
+            minimax_input_usd_per_million=0.30,
+            minimax_output_usd_per_million=1.20,
+        )
         scripts = {
             "avocat": FakeStream(
                 [FakeStreamChunk(content="<LIVE_RESPONSE>ok</LIVE_RESPONSE><FINAL_JSON>" + agent_output_json("avocat") + "</FINAL_JSON>")]

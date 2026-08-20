@@ -52,9 +52,14 @@ adapter_find_security_indicators_in_current_document = (
 adapter_estimate_current_analysis_cost = toolkit.adapter_estimate_current_analysis_cost
 
 
-def registry_tool_schemas() -> list[dict[str, Any]]:
-    """Schémas `tools` OpenAI-compatibles exposés au modèle (jamais le document)."""
-    return toolkit.registry_tool_schemas()
+def registry_tool_schemas(
+    allowed_tools: frozenset[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Schémas `tools` OpenAI-compatibles exposés au modèle (jamais le document).
+
+    Avec `allowed_tools` fourni, seuls ces noms sont inclus (un ensemble vide
+    renvoie une liste vide, à charge de l'appelant d'omettre `tools`)."""
+    return toolkit.registry_tool_schemas(allowed_tools)
 
 
 @dataclass
@@ -90,6 +95,22 @@ ResponseEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 """
 
 
+_PROTOCOL_REPAIR_HINT: str = (
+    "Ta réponse n'est pas valide : un tour final doit obligatoirement "
+    "contenir <LIVE_RESPONSE>un texte non vide</LIVE_RESPONSE> suivi de "
+    "<FINAL_JSON>{...}</FINAL_JSON>, sans texte hors de ces deux balises. "
+    "Renvoie une réponse corrigée respectant strictement cette enveloppe."
+)
+
+RoundEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
+"""Sink de progression observable : `(kind, fields)` avec kind in
+{"agent.round.started", "agent.round.completed"} et fields
+{"round", "max_rounds"} / {"round", "outcome", "latency_ms"}. `outcome` in
+{"tool_calls", "final_response", "protocol_error", "provider_error",
+"max_rounds"}. Décrit l'exécution sans exposer la réflexion privée du modèle.
+"""
+
+
 async def run_agent_loop(
     messages: list[dict[str, Any]],
     session: AgentSession,
@@ -103,20 +124,33 @@ async def run_agent_loop(
     max_output_tokens: int | None = None,
     response_event_sink: ResponseEventSink | None = None,
     stream_final_envelope: bool = False,
+    allowed_tools: frozenset[str] | None = None,
+    round_event_sink: RoundEventSink | None = None,
 ) -> AgentLoopResult:
-    """Boucle générique bornée. `get_connection` alimente l'état SQLite des outils.
+    """Boucle générique bornée. `get_connection` alimente l'état SQLite des outils
+    (repli Palier 3 quand `allowed_tools` n'est pas fourni).
+
+    `allowed_tools`, quand fourni (Palier 4), fige la configuration des outils
+    de CETTE analyse : seuls ces schémas sont envoyés à MiniMax (un ensemble
+    vide omet `tools`/`tool_choice` plutôt que d'envoyer une liste vide), et
+    `toolkit.execute_tool` revérifie cette même liste à l'exécution — un appel
+    fabriqué pour un outil non autorisé est refusé même si son schéma n'a
+    jamais été envoyé au modèle.
 
     Avec `stream_final_envelope=True` (Palier 4), chaque appel MiniMax est
     streamé et la réponse finale doit être l'enveloppe
     `<LIVE_RESPONSE>…</LIVE_RESPONSE><FINAL_JSON>…</FINAL_JSON>` : le texte live
     est diffusé par `response_event_sink`, le JSON final est extrait dans
-    `answer`, et une violation de protocole arrête proprement la boucle
+    `answer`. Une violation de protocole (JSON seul, live vide, marqueurs
+    invalides) déclenche UNE seule requête MiniMax de réparation, toujours en
+    streaming ; si elle échoue aussi, la boucle s'arrête proprement
     (`stop_reason="protocol_error"`) sans exécuter d'outil.
     """
     output_budget = max_output_tokens or settings.minimax_max_output_tokens
     executed_calls: set[tuple[str, str]] = set()
     trace: list[ToolTraceEntry] = []
     executed_tools: list[str] = []
+    tool_schemas = registry_tool_schemas(allowed_tools)
 
     total_input = 0
     total_output = 0
@@ -131,37 +165,62 @@ async def run_agent_loop(
     async with build_client(settings) as client:
         # Boucle visible et montrable : chaque round est un appel MiniMax.
         for round_number in range(1, max_rounds + 1):
+            if round_event_sink is not None:
+                await round_event_sink(
+                    "agent.round.started",
+                    {"round": round_number, "max_rounds": max_rounds},
+                )
             started = time.monotonic()
-            try:
+
+            async def _call(msgs: list[dict[str, Any]]):
                 if stream_final_envelope:
-                    completion = await stream_chat_completion(
+                    return await stream_chat_completion(
                         client,
                         model=settings.minimax_model,
-                        messages=messages,
+                        messages=msgs,
                         max_completion_tokens=output_budget,
                         temperature=0.3,
                         n=1,
-                        tools=registry_tool_schemas(),
-                        tool_choice="auto",
+                        tools=tool_schemas,
+                        tool_choice="auto" if tool_schemas else None,
                         settings=settings,
                         live_sink=response_event_sink,
                         response_role=agent_role,
                     )
-                else:
-                    completion = await client.chat.completions.create(
-                        model=settings.minimax_model,
-                        messages=messages,
-                        max_completion_tokens=output_budget,
-                        temperature=0.3,
-                        n=1,
-                        tools=registry_tool_schemas(),
-                        tool_choice="auto",
-                        extra_body={"thinking": {"type": "disabled"}},
-                    )
+                kwargs: dict[str, Any] = {
+                    "model": settings.minimax_model,
+                    "messages": msgs,
+                    "max_completion_tokens": output_budget,
+                    "temperature": 0.3,
+                    "n": 1,
+                    "extra_body": {"thinking": {"type": "disabled"}},
+                }
+                if tool_schemas:
+                    kwargs["tools"] = tool_schemas
+                    kwargs["tool_choice"] = "auto"
+                return await client.chat.completions.create(**kwargs)
+
+            try:
+                completion = await _call(messages)
             except Exception as exc:  # noqa: BLE001 - toute cause mène au 502
                 raise ProviderError(
                     f"MiniMax agent request failed: {exc.__class__.__name__}"
                 ) from exc
+            round_outcome = "final_response"
+
+            if (
+                stream_final_envelope
+                and completion.protocol_error is not None
+            ):
+                try:
+                    completion = await _call(
+                        messages + [{"role": "user", "content": _PROTOCOL_REPAIR_HINT}]
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    raise ProviderError(
+                        f"MiniMax agent repair request failed: {exc.__class__.__name__}"
+                    ) from exc
+
             total_latency_ms += int((time.monotonic() - started) * 1000)
 
             if completion.usage is not None:
@@ -181,12 +240,35 @@ async def run_agent_loop(
                     live_text = completion.live_text or live_text
                     stop = True
                     stop_reason = "protocol_error"
+                    round_outcome = "protocol_error"
+                    if round_event_sink is not None:
+                        await round_event_sink(
+                            "agent.round.completed",
+                            {
+                                "round": round_number,
+                                "outcome": round_outcome,
+                                "latency_ms": total_latency_ms,
+                            },
+                        )
                     break
                 final_json = (completion.final_json or "").strip()
                 if completion.live_text:
                     live_text = completion.live_text
             else:
                 final_json = ""
+
+            if tool_calls:
+                round_outcome = "tool_calls"
+
+            if round_event_sink is not None:
+                await round_event_sink(
+                    "agent.round.completed",
+                    {
+                        "round": round_number,
+                        "outcome": round_outcome,
+                        "latency_ms": total_latency_ms,
+                    },
+                )
 
             if not tool_calls:
                 content = (message.content or "").strip()
@@ -326,7 +408,7 @@ async def run_agent_loop(
 
                 started_tool = time.monotonic()
                 status, payload, error_code, output_summary = await toolkit.execute_tool(
-                    name, session, settings, get_connection
+                    name, session, settings, get_connection, allowed_tools=allowed_tools
                 )
                 duration_ms = int((time.monotonic() - started_tool) * 1000)
                 trace.append(

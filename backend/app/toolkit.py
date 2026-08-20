@@ -86,13 +86,25 @@ def adapter_find_security_indicators_in_current_document(
     return session.findings
 
 
+class MissingPrerequisiteError(RuntimeError):
+    """L'outil dépend d'un prérequis absent (p.ex. mesure du document)."""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+
+
 def adapter_estimate_current_analysis_cost(
     session: AgentSession, settings: Settings
 ) -> dict[str, Any]:
     from . import tools
 
     if session.metrics is None:
-        session.metrics = tools.measure_document(session.document)
+        raise MissingPrerequisiteError(
+            "missing_prerequisite",
+            "estimate_current_analysis_cost requires measure_current_document "
+            "to have been observed first; it never measures implicitly.",
+        )
     pricing = {
         "model_name": settings.minimax_model,
         "input_usd_per_million_tokens": settings.minimax_input_usd_per_million,
@@ -112,8 +124,15 @@ TOOL_EXECUTORS: dict[str, Any] = {
 }
 
 
-def registry_tool_schemas() -> list[dict[str, Any]]:
-    """Schémas `tools` OpenAI-compatibles exposés au modèle (jamais le document)."""
+def registry_tool_schemas(
+    allowed_tools: frozenset[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Schémas `tools` OpenAI-compatibles exposés au modèle (jamais le document).
+
+    `allowed_tools=None` renvoie les trois schémas (repli Palier 3, ou appel
+    non filtré). Fourni (Palier 4), seuls les noms présents y figurent : un
+    outil désactivé dans la configuration figée de l'analyse n'est plus
+    proposé au modèle, il n'a donc aucune chance d'être choisi."""
     return [
         {
             "type": "function",
@@ -124,6 +143,7 @@ def registry_tool_schemas() -> list[dict[str, Any]]:
             },
         }
         for definition in TOOL_DEFINITIONS
+        if allowed_tools is None or definition["name"] in allowed_tools
     ]
 
 
@@ -158,28 +178,37 @@ async def execute_tool(
     session: AgentSession,
     settings: Settings,
     get_connection=None,
+    *,
+    allowed_tools: frozenset[str] | None = None,
 ) -> tuple[str, dict[str, Any], str | None, dict[str, Any] | None]:
     """Exécute un outil : (status, payload, error_code, output_summary).
 
-    Vérifie l'état SQLite courant avant l'exécution. `get_connection` est une
-    fabrique async de connexion (dépendance ou connexion de tâche de fond).
-    Sans connexion (Palier 3), retombe sur `settings.disabled_tools`.
+    `allowed_tools`, quand fourni (Palier 4), est la configuration IMMUABLE de
+    l'analyse (lue une fois dans `analysis_tool_states`) : c'est elle seule
+    qui décide, sans nouvelle requête SQLite par appel — un appel fabriqué
+    pour un outil non autorisé est refusé même si son schéma n'a jamais été
+    envoyé au modèle. Sans `allowed_tools` (Palier 3, ou appel non filtré),
+    retombe sur le registre global `tool_states` via `get_connection`, ou sur
+    `settings.disabled_tools` sans connexion.
     """
-    state = None
-    if get_connection is not None:
-        async with (await get_connection()) as conn:
-            from . import db
-
-            state = await db.get_tool_state(conn, name)
+    if allowed_tools is not None:
+        disabled_by_config = name not in allowed_tools
     else:
-        disabled = {
-            name_.strip()
-            for name_ in settings.disabled_tools.split(",")
-            if name_.strip()
-        }
-        if name in disabled:
-            state = {"enabled": 0}
-    if state is not None and not state["enabled"]:
+        disabled_by_config = False
+        if get_connection is not None:
+            async with (await get_connection()) as conn:
+                from . import db
+
+                state = await db.get_tool_state(conn, name)
+            disabled_by_config = state is not None and not state["enabled"]
+        else:
+            disabled = {
+                name_.strip()
+                for name_ in settings.disabled_tools.split(",")
+                if name_.strip()
+            }
+            disabled_by_config = name in disabled
+    if disabled_by_config:
         return (
             "error",
             {"error": {"code": "tool_disabled", "message": "Requested tool is unavailable"}},
@@ -196,6 +225,13 @@ async def execute_tool(
         )
     try:
         result = executor(session, settings)
+    except MissingPrerequisiteError as exc:
+        return (
+            "error",
+            {"error": {"code": exc.code, "message": str(exc)}},
+            exc.code,
+            None,
+        )
     except Exception as exc:  # noqa: BLE001 - toute panne d'outil devient une trace
         return (
             "error",

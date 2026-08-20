@@ -3,12 +3,16 @@
 - `aiosqlite` (pinned 0.22.1) : connexion async, requêtes paramétrées.
 - `PRAGMA foreign_keys = ON`, `journal_mode = WAL`, `busy_timeout`.
 - Tables : schema_meta, analyses, expert_runs, tool_events, analysis_events,
-  tool_states.
+  tool_states, analysis_tool_states (v2).
 - L'initialisation est idempotente et se fait dans le lifespan FastAPI.
-- Une analyse inachevée (running) trouvée au démarrage devient `interrupted`
-  sans perte des résultats déjà persistés.
+- Une analyse `running` trouvée au démarrage devient `interrupted` sans perte
+  des résultats déjà persistés ; une analyse `queued` reste `queued` (elle
+  n'a jamais démarré de tâche de fond, un rechargement peut la démarrer).
 - `DISABLED_TOOLS` ne sert qu'à initialiser une base neuve : ensuite la table
-  `tool_states` est la source de vérité.
+  `tool_states` (registre global, pour la prochaine analyse) est la source
+  de vérité. `analysis_tool_states` fige, pour une analyse déjà créée, la
+  configuration lue dans `tool_states` au moment de sa création : elle seule
+  fait foi pour cette analyse, y compris si le registre global change ensuite.
 
 Toute donnée JSON écrite ici provient de modèles Pydantic validés
 (`model_dump(mode="json")`), jamais d'un texte LLM brut.
@@ -23,7 +27,13 @@ from typing import Any, AsyncIterator
 
 import aiosqlite
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"
+
+KNOWN_TOOL_NAMES: tuple[str, ...] = (
+    "measure_current_document",
+    "find_security_indicators_in_current_document",
+    "estimate_current_analysis_cost",
+)
 
 SCHEMA_SQL: tuple[str, ...] = (
     """CREATE TABLE IF NOT EXISTS schema_meta (
@@ -76,6 +86,12 @@ SCHEMA_SQL: tuple[str, ...] = (
         tool_name TEXT PRIMARY KEY,
         enabled INTEGER NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS analysis_tool_states (
+        analysis_id TEXT NOT NULL REFERENCES analyses(id) ON DELETE CASCADE,
+        tool_name TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        PRIMARY KEY (analysis_id, tool_name)
+    )""",
 )
 
 TERMINAL_ANALYSIS_STATUSES = ("completed", "degraded", "failed", "interrupted")
@@ -121,11 +137,14 @@ async def initialize(database_path: str, disabled_tools: str = "") -> None:
             (SCHEMA_VERSION,),
         )
         await _interrupt_running_analyses(conn)
-        await _seed_tool_states_if_needed(conn, disabled_tools)
+        await _sync_tool_states(conn, disabled_tools)
         await conn.commit()
 
 
 async def _interrupt_running_analyses(conn: aiosqlite.Connection) -> None:
+    """Une analyse `running` (tâche de fond perdue au redémarrage) devient
+    `interrupted`. Une analyse `queued` reste `queued` : elle n'a jamais
+    démarré de tâche de fond, un `/start` après rechargement suffit."""
     await conn.execute(
         "UPDATE analyses SET status = 'interrupted', error_code = 'server_restart' "
         "WHERE status = 'running'"
@@ -146,20 +165,14 @@ async def _interrupt_running_analyses(conn: aiosqlite.Connection) -> None:
         )
 
 
-async def _seed_tool_states_if_needed(
-    conn: aiosqlite.Connection, disabled_tools: str
-) -> None:
-    row = await (
-        await conn.execute("SELECT COUNT(*) AS n FROM tool_states")
-    ).fetchone()
-    if row and row["n"] > 0:
-        return
+async def _sync_tool_states(conn: aiosqlite.Connection, disabled_tools: str) -> None:
+    """Backfill idempotent : chaque outil connu obtient une ligne s'il n'en a
+    pas déjà une. `INSERT OR IGNORE` ne touche jamais une ligne existante :
+    une base ancienne ou partielle est complétée sans écraser les choix déjà
+    persistés d'un utilisateur. `disabled_tools` ne sert qu'à l'état initial
+    d'une ligne neuve."""
     disabled = {name.strip() for name in disabled_tools.split(",") if name.strip()}
-    for name in (
-        "measure_current_document",
-        "find_security_indicators_in_current_document",
-        "estimate_current_analysis_cost",
-    ):
+    for name in KNOWN_TOOL_NAMES:
         await conn.execute(
             "INSERT OR IGNORE INTO tool_states (tool_name, enabled) VALUES (?, ?)",
             (name, 0 if name in disabled else 1),
@@ -172,13 +185,72 @@ async def _seed_tool_states_if_needed(
 
 
 async def create_analysis(
-    conn: aiosqlite.Connection, analysis_id: str, document: str, now: str
+    conn: aiosqlite.Connection,
+    analysis_id: str,
+    document: str,
+    now: str,
+    *,
+    status: str = "queued",
 ) -> None:
+    """Crée l'analyse. Par défaut `queued` (Palier R1) : la tâche de fond
+    n'est lancée qu'après `start_analysis`, jamais ici."""
     await conn.execute(
-        "INSERT INTO analyses (id, document, status, created_at) VALUES (?, ?, 'running', ?)",
-        (analysis_id, document, now),
+        "INSERT INTO analyses (id, document, status, created_at) VALUES (?, ?, ?, ?)",
+        (analysis_id, document, status, now),
     )
     await conn.commit()
+
+
+async def snapshot_analysis_tool_states(
+    conn: aiosqlite.Connection, analysis_id: str
+) -> list[aiosqlite.Row]:
+    """Copie `tool_states` (registre global) vers `analysis_tool_states` pour
+    cette analyse, dans la transaction courante, puis renvoie les lignes
+    copiées. À appeler une seule fois, à la création de l'analyse : la
+    configuration devient ensuite immuable pour cette analyse."""
+    await conn.execute(
+        "INSERT INTO analysis_tool_states (analysis_id, tool_name, enabled) "
+        "SELECT ?, tool_name, enabled FROM tool_states",
+        (analysis_id,),
+    )
+    await conn.commit()
+    return await list_analysis_tool_states(conn, analysis_id)
+
+
+async def list_analysis_tool_states(
+    conn: aiosqlite.Connection, analysis_id: str
+) -> list[aiosqlite.Row]:
+    cursor = await conn.execute(
+        "SELECT tool_name, enabled FROM analysis_tool_states "
+        "WHERE analysis_id = ? ORDER BY tool_name",
+        (analysis_id,),
+    )
+    return list(await cursor.fetchall())
+
+
+async def get_analysis_allowed_tools(
+    conn: aiosqlite.Connection, analysis_id: str
+) -> frozenset[str]:
+    """Noms des outils activés dans la configuration figée de l'analyse."""
+    rows = await list_analysis_tool_states(conn, analysis_id)
+    return frozenset(row["tool_name"] for row in rows if row["enabled"])
+
+
+async def start_analysis(
+    conn: aiosqlite.Connection, analysis_id: str, started_at: str
+) -> bool:
+    """Transition atomique `queued` -> `running` (compare-and-set SQL).
+
+    Renvoie True seulement si CETTE transaction a effectué la transition
+    (donc doit lancer la tâche de fond) ; False si l'analyse est déjà
+    `running`/terminale ou n'existe pas."""
+    cursor = await conn.execute(
+        "UPDATE analyses SET status = 'running', started_at = ? "
+        "WHERE id = ? AND status = 'queued'",
+        (started_at, analysis_id),
+    )
+    await conn.commit()
+    return cursor.rowcount == 1
 
 
 async def get_analysis(conn: aiosqlite.Connection, analysis_id: str) -> aiosqlite.Row | None:

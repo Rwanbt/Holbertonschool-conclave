@@ -208,7 +208,10 @@ class TestAgentLoop:
         assert "secret" in entry.output_summary["categories"]
         assert response.answer == "Un indice secret trouvé."
 
-    def test_cost_then_answer(self, monkeypatch) -> None:
+    def test_cost_without_prior_measure_is_missing_prerequisite(self, monkeypatch) -> None:
+        # R1 : plus de mesure implicite — estimer le coût sans avoir mesuré
+        # le document échoue proprement (missing_prerequisite) au lieu
+        # d'inventer une mesure silencieuse.
         response = _run(
             monkeypatch,
             [
@@ -227,11 +230,53 @@ class TestAgentLoop:
                     ]
                 ),
                 _FakeCompletion(
-                    [_FakeChoice(_FakeMessage(content="Le coût estimé est calculé."))]
+                    [_FakeChoice(_FakeMessage(content="Je ne peux pas vérifier."))]
                 ),
             ],
         )
         entry = response.trace[0]
+        assert entry.status == "error"
+        assert entry.error_code == "missing_prerequisite"
+
+    def test_measure_then_cost_succeeds(self, monkeypatch) -> None:
+        response = _run(
+            monkeypatch,
+            [
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                content=None,
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_1", "measure_current_document", "{}"
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                content=None,
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_2", "estimate_current_analysis_cost", "{}"
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(content="Le coût estimé est calculé."))]
+                ),
+            ],
+            settings=_settings(minimax_max_tool_rounds=3),
+        )
+        entry = response.trace[1]
         assert entry.status == "success"
         assert entry.output_summary["currency"] == "USD"
         assert entry.output_summary["estimated_cost_usd"] >= 0.0
