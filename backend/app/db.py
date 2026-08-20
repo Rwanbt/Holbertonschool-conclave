@@ -92,6 +92,12 @@ SCHEMA_SQL: tuple[str, ...] = (
         enabled INTEGER NOT NULL,
         PRIMARY KEY (analysis_id, tool_name)
     )""",
+    # Signaux d'injection repérés à la soumission, conservés avec l'analyse
+    # pour rester consultables après un rechargement (observabilité).
+    """CREATE TABLE IF NOT EXISTS analysis_security (
+        analysis_id TEXT PRIMARY KEY REFERENCES analyses(id) ON DELETE CASCADE,
+        signals_json TEXT NOT NULL
+    )""",
 )
 
 TERMINAL_ANALYSIS_STATUSES = ("completed", "degraded", "failed", "interrupted")
@@ -215,6 +221,47 @@ async def snapshot_analysis_tool_states(
     )
     await conn.commit()
     return await list_analysis_tool_states(conn, analysis_id)
+
+
+async def count_active_analyses(conn: aiosqlite.Connection) -> int:
+    """Analyses non terminées (queued ou running), pour borner la charge."""
+    cursor = await conn.execute(
+        "SELECT COUNT(*) AS n FROM analyses WHERE status IN ('queued', 'running')"
+    )
+    row = await cursor.fetchone()
+    return int(row["n"]) if row else 0
+
+
+async def set_analysis_security(
+    conn: aiosqlite.Connection, analysis_id: str, signals: list[str]
+) -> None:
+    import json
+
+    await conn.execute(
+        "INSERT INTO analysis_security (analysis_id, signals_json) VALUES (?, ?) "
+        "ON CONFLICT(analysis_id) DO UPDATE SET signals_json = excluded.signals_json",
+        (analysis_id, json.dumps(signals, ensure_ascii=False)),
+    )
+    await conn.commit()
+
+
+async def get_analysis_security(
+    conn: aiosqlite.Connection, analysis_id: str
+) -> list[str]:
+    import json
+
+    cursor = await conn.execute(
+        "SELECT signals_json FROM analysis_security WHERE analysis_id = ?",
+        (analysis_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return []
+    try:
+        parsed = json.loads(row["signals_json"])
+    except (ValueError, TypeError):
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
 
 
 async def list_analysis_tool_states(

@@ -43,6 +43,7 @@ function baseSnapshot(overrides: Partial<AnalysisSnapshot> = {}): AnalysisSnapsh
       ],
       disabled_tools: [],
     },
+    security: { prompt_injection_suspected: false, signals: [] },
     ...overrides,
   }
 }

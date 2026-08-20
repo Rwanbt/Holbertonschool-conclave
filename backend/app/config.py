@@ -98,6 +98,16 @@ class Settings(BaseSettings):
         le=512,
         description="Taille cible d'un événement agent.response.delta, en caractères.",
     )
+    max_concurrent_analyses: int = Field(
+        3,
+        ge=1,
+        le=50,
+        description=(
+            "Nombre maximal d'analyses simultanément queued ou running. "
+            "Au-delà, POST /api/analyses répond 429 avec une raison explicite "
+            "plutôt que d'accepter dix soumissions et de saturer le fournisseur."
+        ),
+    )
     stream_flush_interval_ms: int = Field(
         50,
         ge=10,

@@ -19,6 +19,9 @@ jobs:
       - name: Run backend test suite (no MiniMax key: real-provider smoke test skips itself)
         run: python -m pytest backend/tests -q
 
+      - name: Run the evaluation suite (scored, no MiniMax key needed)
+        run: python eval/run_eval.py
+
   frontend:
     name: Frontend tests, lint and build
     runs-on: ubuntu-latest
@@ -41,3 +44,6 @@ jobs:
       - name: Build
         working-directory: frontend
         run: npm run build
+
+      - name: Verify no secret leaked into the published bundle
+        run: ./scripts/check-no-secrets.sh

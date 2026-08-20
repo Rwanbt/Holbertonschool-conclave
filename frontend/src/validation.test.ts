@@ -140,6 +140,7 @@ function snapshotFixture() {
       ],
       disabled_tools: [],
     },
+    security: { prompt_injection_suspected: false, signals: [] },
   }
 }
 
@@ -156,10 +157,16 @@ describe('parseAnalysisCreated', () => {
           'estimate_current_analysis_cost',
         ],
       },
+      security: {
+        prompt_injection_suspected: true,
+        signals: ['override_instructions'],
+      },
     })
     expect(parsed.analysis_id).toBe('xx')
     expect(parsed.status).toBe('queued')
     expect(parsed.tool_configuration.enabled_tools).toEqual(['measure_current_document'])
+    expect(parsed.security.prompt_injection_suspected).toBe(true)
+    expect(parsed.security.signals).toEqual(['override_instructions'])
   })
 
   it('rejette un statut inconnu', () => {

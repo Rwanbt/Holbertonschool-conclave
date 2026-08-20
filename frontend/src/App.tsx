@@ -6,6 +6,7 @@ import { DebugPanel } from './components/DebugPanel'
 import { ExpertColumn } from './components/ExpertColumn'
 import { ToolsPanel } from './components/ToolsPanel'
 import { VerdictPanel } from './components/VerdictPanel'
+import { WhyPanel } from './components/WhyPanel'
 import { httpStatusOf, toErrorMessage } from './errors'
 import { collectLiveResponses } from './liveResponses'
 import {
@@ -19,6 +20,7 @@ import {
 import { isTerminalAnalysisStatus, liveExpertRun } from './steps'
 import type { AnalysisStatus } from './types'
 import { useAnalysisController } from './useAnalysisController'
+import { useTheme } from './useTheme'
 import { useToolCatalog } from './useToolCatalog'
 import { isNonEmptyTrimmed, MAX_DOCUMENT_LENGTH } from './utils'
 import './App.css'
@@ -71,6 +73,7 @@ export default function App() {
 
   const controller = useAnalysisController(analysisId, handleNotFound)
   const toolCatalog = useToolCatalog()
+  const theme = useTheme()
 
   const isNew = analysisId === null
   const snapshot = controller.snapshot
@@ -124,11 +127,29 @@ export default function App() {
       <header className="conclave-header">
         <h1>CONCLAVE</h1>
         <p className="tagline">Trois lectures contradictoires, un verdict exploitable.</p>
-        {!isNew && (
-          <button type="button" className="new-analysis" onClick={newAnalysis}>
-            Nouvelle analyse
+        <div className="header-actions">
+          {!isNew && (
+            <button type="button" className="new-analysis" onClick={newAnalysis}>
+              Nouvelle analyse
+            </button>
+          )}
+          <button
+            type="button"
+            className="theme-toggle"
+            onClick={theme.toggle}
+            aria-pressed={theme.resolved === 'dark'}
+            title={
+              theme.resolved === 'dark'
+                ? 'Basculer en thème clair'
+                : 'Basculer en thème sombre'
+            }
+          >
+            <span aria-hidden="true">{theme.resolved === 'dark' ? '☀' : '☾'}</span>
+            <span className="theme-toggle-label">
+              {theme.resolved === 'dark' ? 'Clair' : 'Sombre'}
+            </span>
           </button>
-        )}
+        </div>
       </header>
 
       {notFoundNotice !== null && <p className="status-error">{notFoundNotice}</p>}
@@ -227,6 +248,8 @@ export default function App() {
                   <ArbiterLivePanel live={liveResponses.arbitre} />
                 )
               )}
+
+              <WhyPanel snapshot={snapshot} events={controller.events} />
 
               <DebugPanel
                 events={controller.events}

@@ -158,7 +158,11 @@ class TestArbiterAndDegradation:
         result = _run_analysis(tmp_path, _settings(tmp_path), client)
 
         assert result.status == "failed"
-        assert result.error_code == "insufficient_expertise"
+        # P5 : on remonte la CAUSE, pas la conséquence. Les experts ont bien
+        # répondu — c'est leur sortie qui était inexploitable. Annoncer
+        # « insufficient_expertise » masquerait la vraie raison, alors que le
+        # checkpoint exige de pouvoir répondre à « pourquoi ? » depuis l'app.
+        assert result.error_code == "structured_output_error"
         assert result.verdict is None
 
     def test_arbiter_failure_keeps_expert_outputs_visible(self, tmp_path, patch_minimax) -> None:

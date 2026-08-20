@@ -59,6 +59,7 @@ function runningSnapshot(): AnalysisSnapshot {
       ],
       disabled_tools: [],
     },
+    security: { prompt_injection_suspected: false, signals: [] },
   }
 }
 

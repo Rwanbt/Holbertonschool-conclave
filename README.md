@@ -180,6 +180,69 @@ conforme à `Happy_path.md` doit parcourir les six étapes et finir sur
 `go_with_conditions` (à condition que les tarifs MiniMax soient configurés pour
 l'estimation du Comptable).
 
+## Passer de la démo au produit (Palier 5)
+
+### Répondre à « pourquoi l'agent a fait ça ? » sans ouvrir le code
+
+Le panneau **« Pourquoi ce résultat ? »** s'affiche sous le verdict et donne,
+dans l'ordre :
+
+1. **ce qui a échoué** — chaque code d'erreur traduit en français avec l'action
+   corrective (`provider_unavailable` → « MiniMax n'a pas répondu […] vérifiez
+   MINIMAX_API_KEY ») ;
+2. **le contrôle du document soumis** — tournures d'instruction repérées ;
+3. **les outils disponibles pour cette analyse** — activés, et désactivés dont
+   le schéma n'a pas été envoyé au modèle ;
+4. **la décision prise à chaque tour** — par rôle : `a demandé un outil`,
+   `a rendu sa réponse finale`, avec la latence ;
+5. **les outils réellement exécutés** et leur résultat.
+
+### Échouer bruyamment, jamais mentir
+
+Deux issues acceptables quand on casse l'application : ça marche, ou ça refuse
+proprement. Jamais « ça ment ».
+
+| Entrée hostile | Réponse |
+|---|---|
+| Champ vide | 422, aucune analyse créée |
+| Corps de 40 Mo | 413 décidé sur `Content-Length`, **avant** lecture du corps |
+| Émojis, cyrillique, SQL | acceptés, stockés à l'identique, requêtes paramétrées |
+| Injection de prompt | analysée, **signalée**, sans extension de capacités (voir `SECURITY.md`) |
+| Dix clics sur « Convoquer » | 429 au-delà de `MAX_CONCURRENT_ANALYSES`, avec la marche à suivre |
+| Réseau coupé / fausse clé | `provider_unavailable` affiché, experts sortis de `running`, **aucun spinner infini** |
+
+### Évaluation chiffrée
+
+Cinq cas décrits à la main dans [`eval/cases.md`](eval/cases.md), rejouables en
+une commande, **sans clé MiniMax** (le fournisseur est simulé) :
+
+```bash
+make eval          # ou, depuis frontend/ : npm run eval
+```
+
+Score courant : **5/5** (2/5 avant le palier 5 — le détail de ce qui l'a fait
+bouger est dans `eval/cases.md`). La CI exécute l'éval à chaque PR, donc une
+régression casse le build.
+
+### Sécurité
+
+[`SECURITY.md`](SECURITY.md) répond en détail à « que se passe-t-il si
+l'utilisateur écrit *ignore tes instructions précédentes* ? », et explique
+pourquoi la détection heuristique n'est **pas** la défense — les vraies
+barrières sont structurelles.
+
+```bash
+cd frontend && npm run build && cd ..
+./scripts/check-no-secrets.sh     # aucune clé dans le bundle publié
+```
+
+### Thème clair / sombre
+
+Un bouton dans l'en-tête bascule le thème. Par défaut l'application suit
+`prefers-color-scheme` ; un choix explicite est mémorisé et l'emporte ensuite
+sur le réglage système. Toutes les couleurs passent par des jetons CSS
+(`src/index.css`), aucune valeur n'est codée en dur dans les composants.
+
 ## Procédure de test
 
 ```bash

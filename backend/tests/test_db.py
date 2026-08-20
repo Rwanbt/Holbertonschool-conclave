@@ -14,6 +14,7 @@ SCHEMA_TABLES = {
     "analysis_events",
     "tool_states",
     "analysis_tool_states",
+    "analysis_security",
 }
 
 
