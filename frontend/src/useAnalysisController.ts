@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { fetchAnalysisSnapshot } from './api/client'
+import { fetchAnalysisSnapshot, fetchEventsHistory, startAnalysis } from './api/client'
 import { openAnalysisEventSource, type SseClient } from './api/sse'
 import { writeStoredLastEventId } from './storage'
-import { appendAnalysisEvent, isTerminalEventType } from './steps'
-import type { AnalysisEvent, AnalysisSnapshot } from './types'
+import { isTerminalAnalysisStatus, isTerminalEventType } from './steps'
+import type { AnalysisEvent, AnalysisEventEnvelope, AnalysisSnapshot } from './types'
 import { isApiError } from './errors'
 
 export type AnalysisConnection =
   | { status: 'idle' }
   | { status: 'loading' }
   | { status: 'live' }
+  | { status: 'closed' }
   | { status: 'reconnecting' }
   | { status: 'error'; message: string }
 
@@ -21,6 +22,38 @@ export interface AnalysisController {
   lastEventId: number
 }
 
+function toAnalysisEvent(envelope: AnalysisEventEnvelope): AnalysisEvent {
+  return {
+    id: envelope.id,
+    type: envelope.event_type as AnalysisEvent['type'],
+    payload: envelope.payload,
+  }
+}
+
+async function loadFullHistory(analysisId: string): Promise<AnalysisEventEnvelope[]> {
+  const events: AnalysisEventEnvelope[] = []
+  let after = 0
+  for (;;) {
+    const page = await fetchEventsHistory(analysisId, after, 500)
+    events.push(...page.events)
+    if (!page.has_more || page.events.length === 0) {
+      break
+    }
+    after = page.last_event_id
+  }
+  return events
+}
+
+/**
+ * Cycle de vie R1 : au montage (nouvelle analyse tout juste créée, ou F5 sur
+ * une analyse existante), on hydrate le snapshot ET l'historique JSON en
+ * parallèle (`readStoredLastEventId` reste une optimisation de reprise,
+ * jamais la seule source : l'historique serveur est autoritaire). Le flux
+ * SSE ne rouvre jamais depuis `after=0` après hydratation, et n'est jamais
+ * ouvert du tout pour une analyse déjà terminale. `POST /start` n'est
+ * appelé qu'une fois `onopen` reçu, et au plus une fois par montage (il est
+ * de toute façon idempotent côté serveur).
+ */
 export function useAnalysisController(
   analysisId: string | null,
   onNotFound?: () => void,
@@ -33,53 +66,58 @@ export function useAnalysisController(
 
   const sseRef = useRef<SseClient | null>(null)
   const snapshotRef = useRef<AnalysisSnapshot | null>(null)
-  const eventsRef = useRef<readonly AnalysisEvent[]>([])
+  const startedRef = useRef(false)
   const disconnectedRef = useRef(false)
 
   snapshotRef.current = snapshot
-  eventsRef.current = events
 
-  const loadSnapshot = useCallback(
+  const reloadSnapshot = useCallback(
     async (id: string): Promise<void> => {
-      setConnection({ status: 'loading' })
       try {
         const next = await fetchAnalysisSnapshot(id)
         snapshotRef.current = next
         setSnapshot(next)
-        if (disconnectedRef.current) {
-          setConnection({ status: 'live' })
-        }
       } catch (error) {
-        if (isApiError(error)) {
-          if (error.kind === 'http' && error.status === 404) {
-            setConnection({
-              status: 'error',
-              message: 'Analyse introuvable : la référence locale a été nettoyée.',
-            })
-            onNotFound?.()
-            return
-          }
-          setConnection({
-            status: 'error',
-            message: error.message,
-          })
-        } else {
-          setConnection({
-            status: 'error',
-            message: 'Une erreur inattendue s\'est produite au rechargement.',
-          })
+        if (isApiError(error) && error.kind === 'http' && error.status === 404) {
+          onNotFound?.()
         }
       }
     },
     [onNotFound],
   )
 
-  const openStream = useCallback(
-    (id: string) => {
-      const client = openAnalysisEventSource(id, 0, {
+  useEffect(() => {
+    if (analysisId === null || analysisId === '') {
+      sseRef.current?.close()
+      sseRef.current = null
+      setSnapshot(null)
+      snapshotRef.current = null
+      setEvents([])
+      setMalformedMessage(null)
+      setLastEventId(0)
+      setConnection({ status: 'idle' })
+      return
+    }
+    const id: string = analysisId
+
+    let cancelled = false
+    startedRef.current = false
+    disconnectedRef.current = false
+    setMalformedMessage(null)
+    setConnection({ status: 'loading' })
+
+    function openStream(afterEventId: number): void {
+      const client = openAnalysisEventSource(id, afterEventId, {
         onOpen: () => {
           disconnectedRef.current = false
           setConnection({ status: 'live' })
+          if (!startedRef.current) {
+            startedRef.current = true
+            void startAnalysis(id).catch(() => {
+              // Idempotent côté serveur : une erreur réseau ici n'empêche
+              // pas le flux SSE de continuer à refléter l'état réel.
+            })
+          }
         },
         onEvent: (event: AnalysisEvent) => {
           const snapshotNow = snapshotRef.current
@@ -87,9 +125,10 @@ export function useAnalysisController(
             return
           }
           setEvents((previous) => {
-            const next = appendAnalysisEvent(previous, event)
-            eventsRef.current = next
-            return next
+            if (previous.some((existing) => existing.id === event.id)) {
+              return previous
+            }
+            return [...previous, event]
           })
           if (event.id > 0) {
             writeStoredLastEventId(id, event.id)
@@ -97,7 +136,9 @@ export function useAnalysisController(
           }
           if (isTerminalEventType(event.type)) {
             client.close()
-            void loadSnapshot(id)
+            sseRef.current = null
+            setConnection({ status: 'closed' })
+            void reloadSnapshot(id)
             return
           }
           if (
@@ -107,7 +148,7 @@ export function useAnalysisController(
             event.type === 'arbiter.completed' ||
             event.type === 'arbiter.failed'
           ) {
-            void loadSnapshot(id)
+            void reloadSnapshot(id)
           }
         },
         onMalformed: (detail: string) => {
@@ -119,35 +160,71 @@ export function useAnalysisController(
         },
       })
       sseRef.current = client
-    },
-    [loadSnapshot],
-  )
-
-  useEffect(() => {
-    const id = analysisId
-    if (id === null || id === '') {
-      sseRef.current?.close()
-      sseRef.current = null
-      setSnapshot(null)
-      snapshotRef.current = null
-      setEvents([])
-      eventsRef.current = []
-      setMalformedMessage(null)
-      setLastEventId(0)
-      setConnection({ status: 'idle' })
-      return
     }
 
-    setMalformedMessage(null)
-    disconnectedRef.current = false
-    void loadSnapshot(id)
-    openStream(id)
+    async function bootstrap(): Promise<void> {
+      let initialSnapshot: AnalysisSnapshot
+      try {
+        initialSnapshot = await fetchAnalysisSnapshot(id)
+      } catch (error) {
+        if (cancelled) return
+        if (isApiError(error)) {
+          if (error.kind === 'http' && error.status === 404) {
+            setConnection({
+              status: 'error',
+              message: 'Analyse introuvable : la référence locale a été nettoyée.',
+            })
+            onNotFound?.()
+            return
+          }
+          setConnection({ status: 'error', message: error.message })
+        } else {
+          setConnection({
+            status: 'error',
+            message: "Une erreur inattendue s'est produite au rechargement.",
+          })
+        }
+        return
+      }
+
+      let history: AnalysisEventEnvelope[] = []
+      try {
+        history = await loadFullHistory(id)
+      } catch {
+        // L'historique est une optimisation d'hydratation ; son échec ne
+        // doit pas empêcher d'afficher le snapshot déjà chargé.
+        history = []
+      }
+      if (cancelled) return
+
+      const hydrated = history.map(toAnalysisEvent)
+      setEvents(hydrated)
+      snapshotRef.current = initialSnapshot
+      setSnapshot(initialSnapshot)
+      const maxId = hydrated.length > 0 ? hydrated[hydrated.length - 1].id : 0
+      setLastEventId(maxId)
+      if (maxId > 0) {
+        writeStoredLastEventId(id, maxId)
+      }
+
+      if (isTerminalAnalysisStatus(initialSnapshot.status)) {
+        // Analyse déjà terminée : on affiche l'état final sans rouvrir le
+        // flux (ce n'est pas une animation live à rejouer).
+        setConnection({ status: 'closed' })
+        return
+      }
+
+      openStream(maxId)
+    }
+
+    void bootstrap()
 
     return () => {
+      cancelled = true
       sseRef.current?.close()
       sseRef.current = null
     }
-  }, [analysisId, loadSnapshot, openStream])
+  }, [analysisId, onNotFound, reloadSnapshot])
 
   return { snapshot, events, connection, malformedMessage, lastEventId }
 }

@@ -4,6 +4,8 @@ import type {
   AnalysisCreated,
   AnalysisSnapshot,
   ApiError,
+  EventsHistoryResponse,
+  StartAnalysisResponse,
   ToolCatalogResponse,
   ToolCommandResponse,
 } from '../types'
@@ -11,6 +13,8 @@ import {
   parseAgentResponse,
   parseAnalysisCreated,
   parseAnalysisSnapshot,
+  parseEventsHistoryResponse,
+  parseStartAnalysisResponse,
   parseToolCatalogResponse,
   parseToolCommandResponse,
   ResponseValidationError,
@@ -76,6 +80,54 @@ export async function createAnalysis(document: string): Promise<AnalysisCreated>
 
   const body: unknown = await readJson(response)
   return parseWith<AnalysisCreated>(body, parseAnalysisCreated)
+}
+
+export async function startAnalysis(
+  analysisId: string,
+): Promise<StartAnalysisResponse> {
+  let response: Response
+  try {
+    response = await fetch(`${ANALYSES_ENDPOINT}/${analysisId}/start`, {
+      method: 'POST',
+    })
+  } catch {
+    throw {
+      kind: 'network',
+      message: `Impossible de joindre le backend (${API_BASE_URL}). Lancez-le puis réessayez.`,
+    } satisfies ApiError
+  }
+
+  if (!response.ok) {
+    throw await httpError(response)
+  }
+
+  const body: unknown = await readJson(response)
+  return parseWith<StartAnalysisResponse>(body, parseStartAnalysisResponse)
+}
+
+export async function fetchEventsHistory(
+  analysisId: string,
+  after: number,
+  limit = 500,
+): Promise<EventsHistoryResponse> {
+  let response: Response
+  try {
+    response = await fetch(
+      `${ANALYSES_ENDPOINT}/${analysisId}/events/history?after=${Math.max(0, after)}&limit=${limit}`,
+    )
+  } catch {
+    throw {
+      kind: 'network',
+      message: `Impossible de joindre le backend (${API_BASE_URL}). Lancez-le puis réessayez.`,
+    } satisfies ApiError
+  }
+
+  if (!response.ok) {
+    throw await httpError(response)
+  }
+
+  const body: unknown = await readJson(response)
+  return parseWith<EventsHistoryResponse>(body, parseEventsHistoryResponse)
 }
 
 export async function fetchAnalysisSnapshot(

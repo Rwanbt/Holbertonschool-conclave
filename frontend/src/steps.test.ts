@@ -47,9 +47,17 @@ function runningSnapshot(): AnalysisSnapshot {
       agent_max_rounds: 5,
       document_max_length: 12000,
       statuses: {
-        analysis: ['running', 'completed', 'degraded', 'failed', 'interrupted'],
+        analysis: ['queued', 'running', 'completed', 'degraded', 'failed', 'interrupted'],
         expert: ['pending', 'running', 'completed', 'error', 'timeout'],
       },
+    },
+    tool_configuration: {
+      enabled_tools: [
+        'measure_current_document',
+        'find_security_indicators_in_current_document',
+        'estimate_current_analysis_cost',
+      ],
+      disabled_tools: [],
     },
   }
 }
@@ -124,10 +132,21 @@ describe('calculateActiveStep', () => {
     expect(calculateActiveStep(snapshot, arbitrated)).toBe(4)
   })
 
-  it('passe à l’étape finale dès qu’un statut terminal est vu', () => {
+  it('passe à l’étape finale quand l’événement terminal est observé', () => {
     const snapshot = runningSnapshot()
     snapshot.status = 'degraded'
-    expect(calculateActiveStep(snapshot, [])).toBe(5)
+    const terminal = [makeEvent({ type: 'analysis.degraded', payload: {} })]
+    expect(calculateActiveStep(snapshot, terminal)).toBe(5)
+  })
+
+  it('un snapshot terminal reçu trop tôt (sans son événement) ne force pas l’étape finale', () => {
+    // R1 : le statut du snapshot seul ne doit jamais faire sauter le
+    // stepper à la fin — seul l'événement terminal observé le fait.
+    const snapshot = runningSnapshot()
+    snapshot.status = 'degraded'
+    expect(calculateActiveStep(snapshot, [])).toBe(1)
+    const started = [makeEvent({ type: 'expert.started', payload: { role: 'avocat' } })]
+    expect(calculateActiveStep(snapshot, started)).toBe(2)
   })
 })
 

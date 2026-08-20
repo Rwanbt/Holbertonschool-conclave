@@ -36,6 +36,7 @@ export interface AgentResponse {
 // ---------------------------------------------------------------------------
 
 export type AnalysisStatus =
+  | 'queued'
   | 'running'
   | 'completed'
   | 'degraded'
@@ -100,10 +101,35 @@ export interface GuardrailInfo {
   statuses: GuardrailStatuses
 }
 
+export interface ToolConfiguration {
+  enabled_tools: ToolName[]
+  disabled_tools: ToolName[]
+}
+
 export interface AnalysisCreated {
   analysis_id: string
   status: AnalysisStatus
   created_at: string
+  tool_configuration: ToolConfiguration
+}
+
+export interface StartAnalysisResponse {
+  analysis_id: string
+  status: AnalysisStatus
+  already_started: boolean
+}
+
+export interface AnalysisEventEnvelope {
+  id: number
+  event_type: string
+  payload: Record<string, unknown>
+  created_at: string
+}
+
+export interface EventsHistoryResponse {
+  events: AnalysisEventEnvelope[]
+  last_event_id: number
+  has_more: boolean
 }
 
 export interface AnalysisSnapshot {
@@ -120,10 +146,14 @@ export interface AnalysisSnapshot {
   verdict: ArbiterVerdict | null
   usage: ExecutionUsage
   guardrails: GuardrailInfo
+  tool_configuration: ToolConfiguration
 }
 
 export type AnalysisEventType =
   | 'analysis.created'
+  | 'analysis.started'
+  | 'agent.round.started'
+  | 'agent.round.completed'
   | 'expert.started'
   | 'tool.started'
   | 'tool.completed'

@@ -128,9 +128,17 @@ function snapshotFixture() {
       agent_max_rounds: 5,
       document_max_length: 12000,
       statuses: {
-        analysis: ['running', 'completed', 'degraded', 'failed', 'interrupted'],
+        analysis: ['queued', 'running', 'completed', 'degraded', 'failed', 'interrupted'],
         expert: ['pending', 'running', 'completed', 'error', 'timeout'],
       },
+    },
+    tool_configuration: {
+      enabled_tools: [
+        'measure_current_document',
+        'find_security_indicators_in_current_document',
+        'estimate_current_analysis_cost',
+      ],
+      disabled_tools: [],
     },
   }
 }
@@ -139,11 +147,19 @@ describe('parseAnalysisCreated', () => {
   it('accepte une création valide', () => {
     const parsed = parseAnalysisCreated({
       analysis_id: 'xx',
-      status: 'running',
+      status: 'queued',
       created_at: '2026-08-19T10:00:00+00:00',
+      tool_configuration: {
+        enabled_tools: ['measure_current_document'],
+        disabled_tools: [
+          'find_security_indicators_in_current_document',
+          'estimate_current_analysis_cost',
+        ],
+      },
     })
     expect(parsed.analysis_id).toBe('xx')
-    expect(parsed.status).toBe('running')
+    expect(parsed.status).toBe('queued')
+    expect(parsed.tool_configuration.enabled_tools).toEqual(['measure_current_document'])
   })
 
   it('rejette un statut inconnu', () => {
@@ -177,6 +193,31 @@ describe('parseAnalysisSnapshot', () => {
     ;(fixture.avocat as Record<string, unknown>).status = 'running'
     ;(fixture.avocat as Record<string, unknown>).output = null
     expect(() => parseAnalysisSnapshot(fixture)).not.toThrow()
+  })
+
+  it('accepte llm_rounds=0 (analyse queued, aucun appel MiniMax encore effectué)', () => {
+    const fixture = snapshotFixture() as Record<string, unknown>
+    fixture.status = 'queued'
+    fixture.verdict = null
+    fixture.started_at = null
+    fixture.completed_at = null
+    ;(fixture.avocat as Record<string, unknown>).status = 'pending'
+    ;(fixture.avocat as Record<string, unknown>).output = null
+    ;(fixture.procureur as Record<string, unknown>).status = 'pending'
+    ;(fixture.procureur as Record<string, unknown>).output = null
+    ;(fixture.comptable as Record<string, unknown>).status = 'pending'
+    ;(fixture.comptable as Record<string, unknown>).output = null
+    fixture.usage = {
+      input_tokens: null,
+      output_tokens: null,
+      total_tokens: null,
+      estimated_cost_usd: null,
+      total_latency_ms: 0,
+      llm_rounds: 0,
+    }
+    const parsed = parseAnalysisSnapshot(fixture)
+    expect(parsed.status).toBe('queued')
+    expect(parsed.usage.llm_rounds).toBe(0)
   })
 })
 
