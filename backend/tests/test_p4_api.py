@@ -404,7 +404,8 @@ class TestDisabledToolDuringAnalysis:
         settings = _settings(tmp_path)
         scripts = scripted_experts()
         scripts.update(scripted_arbiter())
-        patch_minimax(FakeClient(scripts))
+        client = FakeClient(scripts)
+        patch_minimax(client)
         app.dependency_overrides[get_settings] = lambda: settings
 
         with TestClient(app) as test_client:
@@ -433,6 +434,17 @@ class TestDisabledToolDuringAnalysis:
             tool_rows = asyncio.run(read_events())
             assert any(row["error_code"] == "tool_disabled" for row in tool_rows)
             assert snapshot["status"] in {"degraded", "failed"}
+
+            # Un outil désactivé au moment de la création n'est même pas
+            # PROPOSÉ à MiniMax : son schéma est absent de tous les appels
+            # (la vérification défensive de execute_tool traite l'appel
+            # scripté ci-dessus comme un appel fabriqué/invalide).
+            for kwargs in client.created_kwargs:
+                schema_names = {
+                    tool["function"]["name"] for tool in kwargs.get("tools") or []
+                }
+                assert "measure_current_document" not in schema_names
+            assert client.created_kwargs  # au moins un appel a bien eu lieu
         app.dependency_overrides.clear()
 
 
