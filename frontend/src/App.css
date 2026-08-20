@@ -578,6 +578,229 @@
   font-size: 0.85rem;
 }
 
+.live-status {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: #7a5b00;
+}
+
+.live-status:empty {
+  display: none;
+}
+
+.live-draft {
+  margin: 0.5rem 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px dashed #c6ccd8;
+  border-radius: 8px;
+  background-color: #fafbfc;
+}
+
+.live-draft--failed {
+  border-style: solid;
+  border-color: #a12424;
+}
+
+.live-draft-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.live-draft-failed {
+  margin: 0.25rem 0 0;
+  color: #a12424;
+  font-size: 0.85rem;
+}
+
+.live-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin: 0 0 -0.1rem 0.15rem;
+  background-color: #2e7d32;
+  animation: live-blink 1s steps(2, start) infinite;
+}
+
+@keyframes live-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-cursor {
+    animation: none;
+  }
+}
+
+.arbiter-live-badge {
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  background-color: #fdf6e3;
+  color: #7a5b00;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.debug-flows h3 {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.95rem;
+}
+
+.debug-sub {
+  display: block;
+  font-size: 0.8rem;
+  color: #5b6472;
+}
+
+.debug-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 0;
+  margin: 0.75rem 0 0;
+  list-style: none;
+}
+
+.debug-timeline-item {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: #3b4252;
+}
+
+.debug-timeline-id {
+  font-variant-numeric: tabular-nums;
+  color: #5b6472;
+}
+
+.tools-command {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.75rem;
+}
+
+.tools-command-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.tools-command-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.tools-command-input {
+  flex: 1;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #c6ccd8;
+  border-radius: 8px;
+  font: inherit;
+}
+
+.tools-command-row button {
+  flex-shrink: 0;
+  padding: 0.5rem 0.9rem;
+  border: 1px solid #c6ccd8;
+  border-radius: 8px;
+  background-color: #ffffff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tools-command-row button:hover:not(:disabled) {
+  border-color: #1f2430;
+}
+
+.tools-command-row button:disabled {
+  background-color: #f0f2f6;
+  cursor: not-allowed;
+}
+
+.tools-help {
+  margin-top: 0.75rem;
+}
+
+.tools-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #5b6472;
+  font-size: 0.85rem;
+}
+
+.tools-help-header button {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid #c6ccd8;
+  border-radius: 6px;
+  background-color: #ffffff;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.tools-help-code {
+  margin: 0.4rem 0 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px dashed #c6ccd8;
+  border-radius: 6px;
+  background-color: #fafbfc;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  cursor: copy;
+}
+
+.tools-history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0;
+  margin: 0.75rem 0 0;
+  list-style: none;
+}
+
+.tools-history-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  color: #5b6472;
+  font-size: 0.85rem;
+}
+
+.tools-history-action {
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.tools-history-action--list {
+  background-color: #e2e5ec;
+  color: #3b4252;
+}
+
+.tools-history-action--enable {
+  background-color: #e6f2e7;
+  color: #1e5e22;
+}
+
+.tools-history-action--disable {
+  background-color: #f7dcdc;
+  color: #7d1717;
+}
+
+.tools-history-rectified {
+  color: #1e5e22;
+}
+
 .debug-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));

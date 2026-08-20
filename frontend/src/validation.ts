@@ -1,16 +1,16 @@
 import type {
-  AgentResponse,
-  ExecutionUsage,
-  ToolStatus,
-  ToolTraceEntry,
-} from './types'
-import type {
   AgentOutput,
+  AgentResponse,
+  AgentResponseCompletedPayload,
+  AgentResponseDeltaPayload,
+  AgentResponseFailedPayload,
+  AgentResponseStartedPayload,
   AnalysisCreated,
   AnalysisEvent,
   AnalysisEventType,
   AnalysisSnapshot,
   ArbiterVerdict,
+  ExecutionUsage,
   ExpertRun,
   GuardrailInfo,
   Priority,
@@ -18,6 +18,8 @@ import type {
   ToolCommandResponse,
   ToolName,
   ToolState,
+  ToolStatus,
+  ToolTraceEntry,
 } from './types'
 
 export class ResponseValidationError extends Error {
@@ -60,6 +62,14 @@ function readString(record: Record<string, unknown>, key: string): string {
   const value = record[key]
   if (typeof value !== 'string') {
     throw new ResponseValidationError(`le champ "${key}" n'est pas une chaîne.`)
+  }
+  return value
+}
+
+function readNonEmptyString(record: Record<string, unknown>, key: string): string {
+  const value = readString(record, key)
+  if (value.length === 0) {
+    throw new ResponseValidationError(`le champ "${key}" est vide.`)
   }
   return value
 }
@@ -231,6 +241,13 @@ const EXPERT_STATUSES: readonly string[] = [
 
 const EXPERT_ROLES: readonly string[] = ['avocat', 'procureur', 'comptable']
 
+const RESPONSE_ROLES: readonly string[] = [
+  'avocat',
+  'procureur',
+  'comptable',
+  'arbitre',
+]
+
 const PRIORITIES: readonly string[] = ['low', 'medium', 'high']
 
 const VERDICT_DECISIONS: readonly string[] = [
@@ -245,6 +262,10 @@ const TOOL_NAMES: readonly string[] = [
   'estimate_current_analysis_cost',
 ]
 
+const TOOL_ACTIONS: readonly string[] = ['list', 'enable', 'disable']
+
+const MAX_LIVE_DELTA_CHARS = 512
+
 export const SSE_EVENT_TYPES: readonly AnalysisEventType[] = [
   'analysis.created',
   'expert.started',
@@ -257,6 +278,10 @@ export const SSE_EVENT_TYPES: readonly AnalysisEventType[] = [
   'arbiter.started',
   'arbiter.completed',
   'arbiter.failed',
+  'agent.response.started',
+  'agent.response.delta',
+  'agent.response.completed',
+  'agent.response.failed',
   'analysis.completed',
   'analysis.degraded',
   'analysis.failed',
@@ -511,12 +536,20 @@ export function parseArbiterVerdict(value: unknown): ArbiterVerdict {
 
 export function parseToolCatalogResponse(body: unknown): ToolCatalogResponse {
   const record = requireRecord(body)
-  const toolsValue = record.tools
-  if (!Array.isArray(toolsValue)) {
+  const tools = readToolStates(record.tools)
+  return { tools }
+}
+
+function readToolStates(value: unknown): ToolState[] {
+  if (!Array.isArray(value)) {
     throw new ResponseValidationError('le champ "tools" n\'est pas un tableau.')
   }
-  const tools = toolsValue.map(parseToolState)
-  return { tools }
+  if (value.length > 3) {
+    throw new ResponseValidationError(
+      'le champ "tools" ne peut pas dépasser 3 éléments.',
+    )
+  }
+  return value.map(parseToolState)
 }
 
 function parseToolState(value: unknown): ToolState {
@@ -529,9 +562,40 @@ function parseToolState(value: unknown): ToolState {
 
 export function parseToolCommandResponse(body: unknown): ToolCommandResponse {
   const record = requireRecord(body)
-  const tool_name = readEnum<ToolName>(record, 'tool_name', TOOL_NAMES)
-  const enabled = readBoolean(record, 'enabled')
-  return { tool_name, enabled }
+  const action = readEnum<ToolCommandResponse['action']>(
+    record,
+    'action',
+    TOOL_ACTIONS,
+  )
+  const message = readString(record, 'message')
+  const tool_name = readNullableToolName(record.tool_name)
+  const enabled = readNullableBoolean(record.enabled)
+  const tools = readToolStates(record.tools)
+  return { action, message, tool_name, enabled, tools }
+}
+
+function readNullableBoolean(value: unknown): boolean | null {
+  if (value === null) {
+    return null
+  }
+  if (typeof value !== 'boolean') {
+    throw new ResponseValidationError(
+      'le champ "enabled" n\'est ni un booléen ni null.',
+    )
+  }
+  return value
+}
+
+function readNullableToolName(value: unknown): ToolName | null {
+  if (value === null) {
+    return null
+  }
+  if (typeof value !== 'string' || !TOOL_NAMES.includes(value)) {
+    throw new ResponseValidationError(
+      `nom d'outil inconnu : ${String(value)}.`,
+    )
+  }
+  return value as ToolName
 }
 
 export function parseAnalysisEvent(
@@ -550,8 +614,90 @@ export function parseAnalysisEvent(
       `type d'événement SSE inconnu : ${String(eventType)}.`,
     )
   }
-  const payload = requireRecord(dataValue)
-  return { id: idValue, type: eventType as AnalysisEventType, payload }
+  const type = eventType as AnalysisEventType
+  const payload = validateLivePayload(type, requireRecord(dataValue))
+  return { id: idValue, type, payload }
+}
+
+function validateLivePayload(
+  eventType: AnalysisEventType,
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  switch (eventType) {
+    case 'agent.response.started':
+      return parseAgentResponseStartedPayload(payload)
+    case 'agent.response.delta':
+      return parseAgentResponseDeltaPayload(payload)
+    case 'agent.response.completed':
+      return parseAgentResponseCompletedPayload(payload)
+    case 'agent.response.failed':
+      return parseAgentResponseFailedPayload(payload)
+    default:
+      return payload
+  }
+}
+
+export function parseAgentResponseStartedPayload(
+  body: unknown,
+): AgentResponseStartedPayload {
+  const record = requireRecord(body)
+  const analysis_id = readNonEmptyString(record, 'analysis_id')
+  const role = readEnum<AgentResponseStartedPayload['role']>(
+    record,
+    'role',
+    RESPONSE_ROLES,
+  )
+  return { analysis_id, role }
+}
+
+export function parseAgentResponseDeltaPayload(
+  body: unknown,
+): AgentResponseDeltaPayload {
+  const record = requireRecord(body)
+  const analysis_id = readNonEmptyString(record, 'analysis_id')
+  const role = readEnum<AgentResponseDeltaPayload['role']>(
+    record,
+    'role',
+    RESPONSE_ROLES,
+  )
+  const sequence = readPositiveInteger(record.sequence, 'sequence')
+  const rawDelta = readString(record, 'delta')
+  if (rawDelta.length === 0) {
+    throw new ResponseValidationError('le champ "delta" est vide.')
+  }
+  if (rawDelta.length > MAX_LIVE_DELTA_CHARS) {
+    throw new ResponseValidationError(
+      'le champ "delta" dépasse la taille bornée par le contrat backend.',
+    )
+  }
+  return { analysis_id, role, sequence, delta: rawDelta }
+}
+
+export function parseAgentResponseCompletedPayload(
+  body: unknown,
+): AgentResponseCompletedPayload {
+  const record = requireRecord(body)
+  const analysis_id = readNonEmptyString(record, 'analysis_id')
+  const role = readEnum<AgentResponseCompletedPayload['role']>(
+    record,
+    'role',
+    RESPONSE_ROLES,
+  )
+  return { analysis_id, role }
+}
+
+export function parseAgentResponseFailedPayload(
+  body: unknown,
+): AgentResponseFailedPayload {
+  const record = requireRecord(body)
+  const analysis_id = readNonEmptyString(record, 'analysis_id')
+  const role = readEnum<AgentResponseFailedPayload['role']>(
+    record,
+    'role',
+    RESPONSE_ROLES,
+  )
+  const error_code = readNonEmptyString(record, 'error_code')
+  return { analysis_id, role, error_code }
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {

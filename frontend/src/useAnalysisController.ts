@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchAnalysisSnapshot } from './api/client'
 import { openAnalysisEventSource, type SseClient } from './api/sse'
-import {
-  readStoredLastEventId,
-  writeStoredLastEventId,
-} from './storage'
+import { writeStoredLastEventId } from './storage'
 import { appendAnalysisEvent, isTerminalEventType } from './steps'
 import type { AnalysisEvent, AnalysisSnapshot } from './types'
 import { isApiError } from './errors'
@@ -79,8 +76,7 @@ export function useAnalysisController(
 
   const openStream = useCallback(
     (id: string) => {
-      const after = readStoredLastEventId(id)
-      const client = openAnalysisEventSource(id, after, {
+      const client = openAnalysisEventSource(id, 0, {
         onOpen: () => {
           disconnectedRef.current = false
           setConnection({ status: 'live' })

@@ -13,15 +13,15 @@ export function buildListCommand(): string {
   return '/tools list'
 }
 
+/**
+ * Le backend renvoie toujours le catalogue complet dans `response.tools` ;
+ * la réponse remplace la liste locale après tout statut 200.
+ */
 export function reduceToolState(
-  tools: readonly ToolState[],
+  _tools: readonly ToolState[],
   response: ToolCommandResponse,
 ): readonly ToolState[] {
-  return tools.map((tool) =>
-    tool.tool_name === response.tool_name
-      ? { ...tool, enabled: response.enabled }
-      : tool,
-  )
+  return response.tools
 }
 
 export const TOOL_LABELS: Record<ToolName, string> = {

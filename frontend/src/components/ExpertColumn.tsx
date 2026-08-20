@@ -1,9 +1,10 @@
 import { EXPERT_ROLE_LABELS, EXPERT_STATUS_LABELS } from '../steps'
-import type { ExpertRole, ExpertRun } from '../types'
+import type { ExpertRun, ExpertRole, LiveResponseView } from '../types'
 
 interface ExpertColumnProps {
   role: ExpertRole
   run: ExpertRun
+  live: LiveResponseView
 }
 
 function priorityLabel(priority: string): string {
@@ -15,8 +16,14 @@ function priorityLabel(priority: string): string {
   return labels[priority] ?? priority
 }
 
-export function ExpertColumn({ role, run }: ExpertColumnProps) {
+export function ExpertColumn({ role, run, live }: ExpertColumnProps) {
   const output = run.output
+  const hasDraft = live.text.length > 0
+  const streaming = live.status === 'streaming' && run.status === 'running'
+  const interrupted = live.status === 'failed' && hasDraft
+  const runFailed = (run.status === 'error' || run.status === 'timeout') && output === null
+  const awaitingValidation =
+    !output && hasDraft && !interrupted && !streaming && run.status !== 'pending'
 
   return (
     <section className={`expert-column expert-column--${role}`} aria-label={EXPERT_ROLE_LABELS[role]}>
@@ -30,15 +37,43 @@ export function ExpertColumn({ role, run }: ExpertColumnProps) {
         )}
       </header>
 
+      {run.status !== 'completed' && (
+        <p className="live-status" aria-live="polite">
+          {interrupted && 'Réponse interrompue — non validée.'}
+          {!interrupted && runFailed && 'Aucune sortie validée.'}
+          {!interrupted && !runFailed && streaming && hasDraft && 'Génération MiniMax en direct — validation en attente'}
+          {!interrupted && !runFailed && !streaming && awaitingValidation && 'Brouillon reçu — validation en attente'}
+          {!interrupted &&
+            !runFailed &&
+            !(streaming && hasDraft) &&
+            !awaitingValidation &&
+            !output &&
+            run.status === 'running' &&
+            'Préparation de l’analyse…'}
+        </p>
+      )}
+
       {run.status === 'pending' && (
         <p className="expert-empty">En attente de démarrage.</p>
       )}
 
-      {run.status === 'running' && (
-        <p className="expert-running">Analyse en cours…</p>
+      {hasDraft && output === null && (
+        <div
+          className={`live-draft${interrupted ? ' live-draft--failed' : ''}`}
+          aria-label={`Brouillon live de ${EXPERT_ROLE_LABELS[role]}`}
+        >
+          <p className="live-draft-text">{live.text}</p>
+          {streaming && (
+            <span className="live-cursor" aria-hidden="true" />
+          )}
+        </div>
       )}
 
-      {(run.status === 'error' || run.status === 'timeout') && output === null && (
+      {interrupted && (
+        <p className="live-draft-failed">Brouillon conservé, interrompu — non validé.</p>
+      )}
+
+      {runFailed && !hasDraft && (
         <p className="expert-empty">Aucune sortie validée.</p>
       )}
 

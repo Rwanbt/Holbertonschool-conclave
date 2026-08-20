@@ -79,6 +79,18 @@ describe('appendAnalysisEvent / isIdempotentDuplicate', () => {
     expect(isIdempotentDuplicate(once, event)).toBe(true)
   })
 
+  it('ignore un delta SSE dupliqué par identifiant (rejeu/reconnexion)', () => {
+    const delta = makeEvent({
+      id: 7,
+      type: 'agent.response.delta',
+      payload: { analysis_id: 'a', role: 'avocat', sequence: 3, delta: 'texte' },
+    })
+    const once = appendAnalysisEvent([], delta)
+    const twice = appendAnalysisEvent(once, delta)
+    expect(twice).toHaveLength(1)
+    expect(isIdempotentDuplicate(once, delta)).toBe(true)
+  })
+
   it('conserve les événements dans l’ordre reçu', () => {
     const first = makeEvent({ id: 1 })
     const second = makeEvent({ id: 2, type: 'tool.completed' })

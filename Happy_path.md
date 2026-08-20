@@ -5,9 +5,9 @@
 
 1. **Soumettre.** Nous ouvrons CONCLAVE, collons sans la modifier la proposition contenue dans `demo_document.txt`, puis montrons que le compteur reste sous 12 000 caractères.
 2. **Convoquer.** Nous cliquons sur « Convoquer le Conclave » ; l'interface crée une analyse et affiche immédiatement les trois colonnes Avocat, Procureur et Comptable en cours.
-3. **Observer.** Les trois agents travaillent en parallèle dans leur propre colonne, puis chaque résultat validé apparaît dès qu'il est prêt : l'Avocat défend le pilote limité, le Procureur localise les risques d'accès et de données, le Comptable évalue la complexité de l'OCR, du RAG et de l'exploitation.
+3. **Observer.** Les trois agents travaillent en parallèle dans leur propre colonne. Pendant la génération, nous voyons chaque expert appeler ses outils (`tool.started` / `tool.completed` dans le panneau de démonstration), puis sa réponse arriver **au fil de l'eau** : le texte de la carte grandit réellement avec les deltas SSE avant tout événement `expert.completed`. Si nous rechargeons la page (F5) à ce moment-là, le brouillon interrompu est reconstruit par le rejeu depuis zéro. Dès que le snapshot est rechargé, la carte structurée validée (constats, note, recommandations) remplace le brouillon.
 4. **Comparer.** Les agents terminent dans leur ordre réel ; chaque colonne affiche 2 à 5 constats structurés, une note clairement nommée et au plus trois recommandations.
-5. **Arbitrer.** Après validation des trois sorties, l'Arbitre démarre et rend un verdict `go_with_conditions` : conserver le pilote, mais sécuriser les accès, minimiser les données et réduire la première version avant déploiement.
+5. **Arbitrer.** Après validation des trois sorties, l'Arbitre démarre et son raisonnement apparaît en direct dans le panneau d'arbitrage avant la clôture ; puis le verdict validé `go_with_conditions` remplace le brouillon : conserver le pilote, mais sécuriser les accès, minimiser les données et réduire la première version avant déploiement.
 6. **Décider.** Nous terminons sur le verdict final : score global, désaccord principal, risques prioritaires, trois actions ordonnées et compromis accepté ; l'état passe à « Analyse terminée » sans changer de page.
 
 ## Conditions de répétabilité
