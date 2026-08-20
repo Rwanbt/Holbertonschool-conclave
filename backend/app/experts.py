@@ -47,6 +47,10 @@ from .schemas import (
 
 EXPERT_ROLES: tuple[ExpertRole, ...] = ("avocat", "procureur", "comptable")
 
+_COMPTABLE_REQUIRED_TOOLS: frozenset[str] = frozenset(
+    {"measure_current_document", "estimate_current_analysis_cost"}
+)
+
 _EXPERT_ENVELOPE: str = (
     "Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement "
     "avec l'enveloppe suivante : "
@@ -283,8 +287,14 @@ async def run_expert(
     session: AgentSession,
     settings: Settings,
     get_connection: Callable[[], Awaitable[Any]],
+    allowed_tools: frozenset[str] | None = None,
 ) -> ExpertRunResult:
-    """Exécute un expert : boucle d'outils puis sortie JSON validée (1 réparation)."""
+    """Exécute un expert : boucle d'outils puis sortie JSON validée (1 réparation).
+
+    `allowed_tools` est la configuration IMMUABLE de l'analyse (lue une seule
+    fois dans `analysis_tool_states` par l'orchestrateur) : elle seule décide
+    des schémas envoyés à MiniMax et de ce que `execute_tool` autorise.
+    """
     run_id = uuid.uuid4().hex
     started_at = db.utc_now_iso()
 
@@ -357,6 +367,16 @@ async def run_expert(
                 now,
             )
 
+    async def round_sink(kind: str, fields: dict[str, Any]) -> None:
+        await emit(
+            kind,
+            {
+                "analysis_id": analysis_id,
+                "role": role,
+                **fields,
+            },
+        )
+
     async with (await get_connection()) as conn:
         await db.upsert_expert_run(
             conn,
@@ -389,6 +409,8 @@ async def run_expert(
             max_output_tokens=settings.expert_max_output_tokens,
             response_event_sink=response_sink,
             stream_final_envelope=True,
+            allowed_tools=allowed_tools,
+            round_event_sink=round_sink,
         )
 
     try:
@@ -425,6 +447,16 @@ async def run_expert(
     output: AgentOutput | None = None
     error_code: str | None = None
 
+    # Le comptable ne doit une preuve réelle QUE pour les outils réellement
+    # disponibles dans la configuration figée de cette analyse : un outil
+    # désactivé ne peut pas être exécuté, donc ne peut pas être exigé — le
+    # comptable signale alors l'indisponibilité sans inventer de chiffre.
+    required_comptable_tools = (
+        _COMPTABLE_REQUIRED_TOOLS
+        if allowed_tools is None
+        else (_COMPTABLE_REQUIRED_TOOLS & allowed_tools)
+    )
+
     raw = (loop_result.answer or "").strip()
     if not raw:
         error_code = loop_result.stop_reason or "empty_output"
@@ -438,9 +470,8 @@ async def run_expert(
             hint = "champs manquants : " + ", ".join(missing)
         elif _first_findings_without_evidence(data) is not None:
             hint = _first_findings_without_evidence(data)
-        elif role == "comptable" and (
-            "measure_current_document" not in loop_result.executed_tools
-            or "estimate_current_analysis_cost" not in loop_result.executed_tools
+        elif role == "comptable" and any(
+            tool not in loop_result.executed_tools for tool in required_comptable_tools
         ):
             hint = (
                 "une conclusion chiffrée ne peut pas être validée sans avoir "
@@ -470,10 +501,9 @@ async def run_expert(
                     else:
                         if role == "comptable":
                             repaired_executed = loop_result.executed_tools
-                            if (
-                                "measure_current_document" not in repaired_executed
-                                or "estimate_current_analysis_cost"
-                                not in repaired_executed
+                            if any(
+                                tool not in repaired_executed
+                                for tool in required_comptable_tools
                             ):
                                 output = None
             if output is None:
@@ -537,6 +567,7 @@ async def run_arbiter(
     unavailable_agents: list[ExpertRole],
     settings: Settings,
     get_connection: Callable[[], Awaitable[Any]],
+    allowed_tools: frozenset[str] | None = None,
 ) -> tuple[ArbiterVerdict | None, ExecutionUsage]:
     """Arbitre : reçoit document + sorties validées, rend un verdict JSON validé."""
     async def emit(event_type: str, payload: dict[str, Any]) -> None:
@@ -544,6 +575,9 @@ async def run_arbiter(
             await db.insert_analysis_event(
                 conn, analysis_id, event_type, payload, db.utc_now_iso()
             )
+
+    async def round_sink(kind: str, fields: dict[str, Any]) -> None:
+        await emit(kind, {"analysis_id": analysis_id, "role": "arbitre", **fields})
 
     response_sequences: dict[str, int] = {}
 
@@ -648,6 +682,8 @@ async def run_arbiter(
             max_output_tokens=settings.expert_max_output_tokens,
             response_event_sink=response_sink,
             stream_final_envelope=True,
+            allowed_tools=allowed_tools,
+            round_event_sink=round_sink,
         )
 
     try:
@@ -720,12 +756,26 @@ async def run_analysis(
     settings: Settings,
     get_connection: Callable[[], Awaitable[Any]],
 ) -> AnalysisResult:
-    """Orchestration complète d'une analyse (statuts, événements, persistance)."""
+    """Orchestration complète d'une analyse (statuts, événements, persistance).
+
+    Le passage `queued` -> `running` et l'événement `analysis.started` sont la
+    responsabilité de l'appelant (route `/start`, avant de lancer cette tâche
+    de fond) : cette fonction lit uniquement la configuration des outils déjà
+    figée par `snapshot_analysis_tool_states` à la création de l'analyse.
+    """
     session = AgentSession(document=document)
-    started_at = db.utc_now_iso()
 
     async with (await get_connection()) as conn:
-        await db.set_analysis_started(conn, analysis_id, started_at)
+        tool_rows = await db.list_analysis_tool_states(conn, analysis_id)
+    # Repli : une analyse créée sans passer par `POST /api/analyses` (tests
+    # unitaires appelant `run_analysis`/`run_expert` directement) n'a jamais
+    # de configuration figée. `allowed_tools=None` retombe alors sur le
+    # registre global `tool_states`, comme avant R1.
+    allowed_tools = (
+        frozenset(row["tool_name"] for row in tool_rows if row["enabled"])
+        if tool_rows
+        else None
+    )
 
     results: list[ExpertRunResult] = []
 
@@ -737,6 +787,7 @@ async def run_analysis(
             session=session,
             settings=settings,
             get_connection=get_connection,
+            allowed_tools=allowed_tools,
         )
 
     tasks = [run_one(role) for role in EXPERT_ROLES]
@@ -792,6 +843,7 @@ async def run_analysis(
             unavailable_agents=missing_roles,
             settings=settings,
             get_connection=get_connection,
+            allowed_tools=allowed_tools,
         )
         if verdict is not None and missing_roles:
             # Informations structurelles connues du seul orchestrateur : imposées.

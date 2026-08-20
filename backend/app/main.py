@@ -38,13 +38,16 @@ from .schemas import (
     AnalysisSnapshot,
     ArbiterVerdict,
     AgentOutput,
+    EventsHistoryResponse,
     ExecutionUsage,
     ExpertRunView,
     LLMRequest,
     LLMResponse,
+    StartAnalysisResponse,
     ToolCatalogResponse,
     ToolCommandRequest,
     ToolCommandResponse,
+    ToolConfiguration,
 )
 
 app = FastAPI(
@@ -165,6 +168,13 @@ async def p3_agent(
 # ---------------------------------------------------------------------------
 
 
+def _tool_configuration_from_rows(rows: list[Any]) -> ToolConfiguration:
+    return ToolConfiguration(
+        enabled_tools=[row["tool_name"] for row in rows if row["enabled"]],
+        disabled_tools=[row["tool_name"] for row in rows if not row["enabled"]],
+    )
+
+
 @app.post(
     "/api/analyses",
     response_model=AnalysisCreated,
@@ -174,6 +184,11 @@ async def create_analysis(
     request: AnalysisCreateRequest,
     settings: Settings = Depends(get_settings),
 ) -> AnalysisCreated | JSONResponse:
+    """Crée l'analyse en `queued` et fige sa configuration d'outils dans la
+    même transaction : AUCUNE tâche de fond n'est lancée ici. Le job ne
+    démarre qu'après `POST /api/analyses/{id}/start`, appelé par le
+    navigateur une fois le flux SSE ouvert (`EventSource.onopen`), afin que
+    l'utilisateur ne puisse jamais rater le tout début de l'exécution."""
     if not settings.minimax_api_key:
         return JSONResponse(
             status_code=500,
@@ -184,19 +199,74 @@ async def create_analysis(
     now = db.utc_now_iso()
 
     async with db.open_connection(settings.database_path) as conn:
-        await db.create_analysis(conn, analysis_id, request.document, now)
+        await db.create_analysis(conn, analysis_id, request.document, now, status="queued")
+        rows = await db.snapshot_analysis_tool_states(conn, analysis_id)
+        tool_configuration = _tool_configuration_from_rows(rows)
         await db.insert_analysis_event(
             conn,
             analysis_id,
             "analysis.created",
-            {"analysis_id": analysis_id, "created_at": now},
+            {
+                "analysis_id": analysis_id,
+                "created_at": now,
+                "enabled_tools": tool_configuration.enabled_tools,
+                "disabled_tools": tool_configuration.disabled_tools,
+            },
             now,
         )
+
+    return AnalysisCreated(
+        analysis_id=analysis_id,
+        status="queued",
+        created_at=now,
+        tool_configuration=tool_configuration,
+    )
+
+
+@app.post(
+    "/api/analyses/{analysis_id}/start",
+    response_model=StartAnalysisResponse,
+)
+async def start_analysis(
+    analysis_id: str,
+    settings: Settings = Depends(get_settings),
+) -> StartAnalysisResponse | JSONResponse:
+    """Démarrage idempotent : compare-and-set SQL `queued` -> `running`.
+
+    Seule la requête qui a réellement effectué la transition lance la tâche
+    de fond ; les suivantes (double-clic, onglet dupliqué, F5 pendant la
+    course) constatent `already_started=True` sans rien recréer. Un
+    rechargement de page ne relance donc jamais un job en cours."""
+    async with db.open_connection(settings.database_path) as conn:
+        row = await db.get_analysis(conn, analysis_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="analysis not found")
+        if row["status"] != "queued":
+            return StartAnalysisResponse(
+                analysis_id=analysis_id, status=row["status"], already_started=True
+            )
+        started_at = db.utc_now_iso()
+        transitioned = await db.start_analysis(conn, analysis_id, started_at)
+        if not transitioned:
+            current = await db.get_analysis(conn, analysis_id)
+            return StartAnalysisResponse(
+                analysis_id=analysis_id,
+                status=current["status"] if current else "running",
+                already_started=True,
+            )
+        await db.insert_analysis_event(
+            conn,
+            analysis_id,
+            "analysis.started",
+            {"analysis_id": analysis_id, "started_at": started_at},
+            started_at,
+        )
+        document = row["document"]
 
     task = asyncio.create_task(
         experts.run_analysis(
             analysis_id,
-            request.document,
+            document,
             settings,
             _connection_factory(settings),
         )
@@ -206,7 +276,12 @@ async def create_analysis(
         lambda _t, aid=analysis_id: app.state.analysis_tasks.pop(aid, None)
     )
 
-    return AnalysisCreated(analysis_id=analysis_id, status="running", created_at=now)
+    return JSONResponse(
+        status_code=202,
+        content=StartAnalysisResponse(
+            analysis_id=analysis_id, status="running", already_started=False
+        ).model_dump(mode="json"),
+    )
 
 
 def _parse_expert_output(raw_json: str | None):
@@ -271,6 +346,8 @@ async def get_analysis_snapshot(
             error_code=run["error_code"],
         )
 
+    tool_rows = await db.list_analysis_tool_states(conn, analysis_id)
+
     return AnalysisSnapshot(
         analysis_id=row["id"],
         document=row["document"],
@@ -291,10 +368,54 @@ async def get_analysis_snapshot(
             "agent_max_rounds": _boot_settings.agent_max_rounds,
             "document_max_length": 12000,
             "statuses": {
-                "analysis": ["running", "completed", "degraded", "failed", "interrupted"],
+                "analysis": [
+                    "queued",
+                    "running",
+                    "completed",
+                    "degraded",
+                    "failed",
+                    "interrupted",
+                ],
                 "expert": ["pending", "running", "completed", "error", "timeout"],
             },
         },
+        tool_configuration=_tool_configuration_from_rows(tool_rows),
+    )
+
+
+@app.get(
+    "/api/analyses/{analysis_id}/events/history",
+    response_model=EventsHistoryResponse,
+)
+async def get_analysis_events_history(
+    analysis_id: str,
+    after: int = 0,
+    limit: int = 500,
+    conn: Any = Depends(get_db),
+) -> EventsHistoryResponse:
+    """Historique JSON paginé pour hydrater un F5 sans animation artificielle
+    (`readStoredLastEventId` reste une optimisation de reprise, jamais la
+    seule source : cet historique serveur est autoritaire)."""
+    row = await db.get_analysis(conn, analysis_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="analysis not found")
+
+    bounded_limit = max(1, min(limit, 500))
+    rows = await db.list_events_after(conn, analysis_id, max(0, after))
+    truncated = rows[:bounded_limit]
+    events = [
+        {
+            "id": r["id"],
+            "event_type": r["event_type"],
+            "payload": json.loads(r["payload_json"]),
+            "created_at": r["created_at"],
+        }
+        for r in truncated
+    ]
+    return EventsHistoryResponse(
+        events=events,
+        last_event_id=truncated[-1]["id"] if truncated else max(0, after),
+        has_more=len(rows) > len(truncated),
     )
 
 
@@ -355,7 +476,7 @@ async def stream_analysis_events(
         event_source(),
         media_type="text/event-stream",
         headers={
-            "Cache-Control": "no-cache",
+            "Cache-Control": "no-cache, no-transform",
             "X-Accel-Buffering": "no",
         },
     )

@@ -51,22 +51,23 @@ persistance SQLite sont gérées par la fermeture de l'appelant (experts.py).
 def normalize_delta(buffer: str, incoming: str) -> str:
     """Calcule le vrai delta entre l'accumulé et un morceau reçu.
 
-    MiniMax peut envoyer des morceaux cumulatifs, des préfixes répétés ou des
-    suffixes dupliqués. Les quatre cas sont traités sans jamais recopier un
-    texte déjà présent :
+    MiniMax peut envoyer des morceaux cumulatifs (chaque morceau répète tout
+    le texte déjà produit) ou des préfixes strictement répétés (un morceau
+    déjà entièrement contenu au début de l'accumulé). Seuls ces deux cas sont
+    traités sans jamais recopier un texte déjà présent :
 
-    - incoming commence par buffer        -> cumulatif, nouveau = suffixe ;
-    - buffer commence par incoming        -> préfixe répété, rien de nouveau ;
-    - buffer finit par incoming           -> doublon, rien de nouveau ;
-    - sinon                               -> delta classique.
+    - incoming commence par buffer  -> cumulatif, nouveau = suffixe ;
+    - buffer commence par incoming  -> préfixe répété, rien de nouveau ;
+    - sinon                         -> delta classique, même s'il répète un
+      caractère, un espace ou une sous-chaîne déjà vus ailleurs dans le
+      texte : une règle générale `buffer.endswith(incoming)` supprimerait à
+      tort une répétition légitime (p.ex. deux espaces consécutifs).
     """
     if not incoming:
         return ""
     if incoming.startswith(buffer):
         return incoming[len(buffer):]
     if buffer.startswith(incoming):
-        return ""
-    if buffer.endswith(incoming):
         return ""
     return incoming
 
@@ -139,7 +140,9 @@ class EnvelopeParser:
     inside_final_json -> done (ou error). Les marqueurs peuvent être coupés
     entre deux morceaux : un suffixe de longueur `len(marqueur) - 1` est
     conservé entre les appels. Les espaces autour des sections sont tolérés.
-    Refus : deux sections live, marqueurs inversés, section finale absente.
+    Refus : deux sections live, marqueurs inversés, section finale absente,
+    section `<FINAL_JSON>` sans `<LIVE_RESPONSE>` non vide (un tour final ne
+    peut plus terminer avec zéro texte live).
     """
 
     def __init__(self, max_live_chars: int):
@@ -150,6 +153,7 @@ class EnvelopeParser:
         self._final_json: str | None = None
         self._error: str | None = None
         self._saw_marker = False
+        self._live_started = False
 
     @property
     def live_text(self) -> str:
@@ -170,6 +174,13 @@ class EnvelopeParser:
     @property
     def saw_marker(self) -> bool:
         return self._saw_marker
+
+    @property
+    def live_started(self) -> bool:
+        """True dès que la section `<LIVE_RESPONSE>` a réellement commencé
+        (marqueur ouvrant rencontré), pour émettre `agent.response.started`
+        immédiatement plutôt qu'au premier paquet bufferisé."""
+        return self._live_started
 
     def _fail(self, message: str) -> None:
         if self._error is None:
@@ -215,6 +226,7 @@ class EnvelopeParser:
                         return emitted
                     self._pending = self._pending[open_idx + len(LIVE_OPEN):]
                     self._saw_marker = True
+                    self._live_started = True
                     self._state = "inside_live"
                     continue
                 if LIVE_CLOSE in self._pending or JSON_OPEN in self._pending:
@@ -283,8 +295,17 @@ class EnvelopeParser:
         """Clôt le flux ; renvoie une erreur de protocole si les marqueurs vus
         ne sont pas suivis d'une section finale valide. Une réponse sans aucune
         balise (round d'outil ou texte libre) n'est pas une erreur : c'est un
-        cas où l'enveloppe n'a simplement pas été demandée."""
+        cas où l'enveloppe n'a simplement pas été demandée. Un `<FINAL_JSON>`
+        clos sans jamais avoir ouvert une section live non vide EST une erreur
+        de protocole : un tour final ne peut plus terminer avec zéro texte
+        live (une réponse JSON-only ne peut plus réussir silencieusement)."""
         if self._state == "done":
+            if not self._live_started:
+                self._fail("missing LIVE_RESPONSE section")
+                return self._error
+            if not self._live_text.strip():
+                self._fail("empty live response section")
+                return self._error
             return None
         if self._state == "error":
             return self._error
@@ -337,6 +358,7 @@ class StreamCollector:
                 if piece:
                     self.content += piece
                     emitted = self._parser.feed(piece)
+                    await self._maybe_emit_started()
                     if emitted:
                         self.live_text += emitted
                         self._live_buffer += emitted
@@ -371,12 +393,23 @@ class StreamCollector:
             arguments=getattr(function, "arguments", None) if function is not None else None,
         )
 
+    async def _maybe_emit_started(self) -> None:
+        """Émet `agent.response.started` dès que `<LIVE_RESPONSE>` est
+        reconnu, sans attendre qu'un paquet atteigne la taille de flush."""
+        if self._started or not self._parser.live_started:
+            return
+        if self._live_sink is None or not self._response_role:
+            return
+        self._started = True
+        await self._live_sink("agent.response.started", {"role": self._response_role})
+
     async def _flush_size(self) -> None:
         if len(self._live_buffer) >= self._settings.stream_delta_batch_chars:
             await self._flush()
 
     async def _flush_time(self) -> None:
-        if self._live_buffer and (time.monotonic() - self._last_flush) >= 0.1:
+        interval = self._settings.stream_flush_interval_ms / 1000.0
+        if self._live_buffer and (time.monotonic() - self._last_flush) >= interval:
             await self._flush()
 
     async def _flush(self) -> None:
