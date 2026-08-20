@@ -97,7 +97,17 @@ export function ToolsPanel({ catalog, frozenConfiguration = null }: ToolsPanelPr
         <p className="status-error">{catalog.errorMessage}</p>
       )}
       {loading && <p className="tools-empty">Lecture du catalogue des outils…</p>}
-      {!loading && (
+      {!loading && displayedTools.length === 0 && (
+        // Sans ce cas explicite, un catalogue vide (backend injoignable, CORS,
+        // 500) rendait une liste vide : l'utilisateur ne voyait AUCUN switch
+        // et pouvait croire que la fonctionnalité n'existe pas.
+        <p className="status-error">
+          Catalogue des outils indisponible : les switches ne peuvent pas être
+          affichés. Vérifiez que le backend répond sur <code>GET /api/tools</code>,
+          puis cliquez sur « Actualiser ».
+        </p>
+      )}
+      {!loading && displayedTools.length > 0 && (
         <ul className="tools-list">
           {displayedTools.map((tool) => {
             const dependency = TOOL_DEPENDENCY[tool.tool_name]

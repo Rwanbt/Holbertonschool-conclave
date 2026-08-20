@@ -1,5 +1,5 @@
 import type { AnalysisEvent } from '../types'
-import { parseAnalysisEvent, ResponseValidationError } from '../validation'
+import { parseAnalysisEvent, ResponseValidationError, SSE_EVENT_TYPES } from '../validation'
 
 const API_BASE_URL: string =
   import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -49,26 +49,19 @@ export function openAnalysisEventSource(
     }
   }
 
+  // `EventSource` ne remet un événement NOMMÉ (`event: <type>`) qu'aux
+  // écouteurs enregistrés pour ce type exact : l'écouteur `message` ne reçoit
+  // QUE les événements sans champ `event:`. Un type émis par le backend mais
+  // absent d'ici est donc silencieusement jeté par le navigateur, sans erreur
+  // ni `onMalformed` — bug invisible en test unitaire.
+  //
+  // La liste est donc DÉRIVÉE de `SSE_EVENT_TYPES` (la même source de vérité
+  // que le validateur) au lieu d'être recopiée à la main : ajouter un type au
+  // contrat l'abonne automatiquement, les deux ne peuvent plus diverger.
   source.addEventListener('message', onMessage)
-  source.addEventListener('analysis.created', onMessage)
-  source.addEventListener('expert.started', onMessage)
-  source.addEventListener('tool.started', onMessage)
-  source.addEventListener('tool.completed', onMessage)
-  source.addEventListener('tool.failed', onMessage)
-  source.addEventListener('expert.completed', onMessage)
-  source.addEventListener('expert.failed', onMessage)
-  source.addEventListener('expert.timeout', onMessage)
-  source.addEventListener('arbiter.started', onMessage)
-  source.addEventListener('arbiter.completed', onMessage)
-  source.addEventListener('arbiter.failed', onMessage)
-  source.addEventListener('agent.response.started', onMessage)
-  source.addEventListener('agent.response.delta', onMessage)
-  source.addEventListener('agent.response.completed', onMessage)
-  source.addEventListener('agent.response.failed', onMessage)
-  source.addEventListener('analysis.completed', onMessage)
-  source.addEventListener('analysis.degraded', onMessage)
-  source.addEventListener('analysis.failed', onMessage)
-  source.addEventListener('analysis.interrupted', onMessage)
+  for (const eventType of SSE_EVENT_TYPES) {
+    source.addEventListener(eventType, onMessage)
+  }
 
   source.onopen = onOpen
   source.onerror = onError

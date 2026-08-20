@@ -22,6 +22,10 @@ export interface AnalysisController {
   lastEventId: number
 }
 
+/** Délai après lequel `/start` est déclenché même sans `onopen` (filet de
+ * sécurité contre un flux SSE qui ne s'ouvrirait jamais). */
+export const START_FALLBACK_MS = 3000
+
 function toAnalysisEvent(envelope: AnalysisEventEnvelope): AnalysisEvent {
   return {
     id: envelope.id,
@@ -101,23 +105,44 @@ export function useAnalysisController(
     const id: string = analysisId
 
     let cancelled = false
+    let startFallbackTimer: ReturnType<typeof setTimeout> | null = null
     startedRef.current = false
     disconnectedRef.current = false
     setMalformedMessage(null)
     setConnection({ status: 'loading' })
 
+    function startOnce(): void {
+      if (startedRef.current || cancelled) {
+        return
+      }
+      startedRef.current = true
+      if (startFallbackTimer !== null) {
+        clearTimeout(startFallbackTimer)
+        startFallbackTimer = null
+      }
+      void startAnalysis(id).catch(() => {
+        // Idempotent côté serveur : une erreur réseau ici n'empêche pas le
+        // flux SSE de continuer à refléter l'état réel.
+      })
+    }
+
     function openStream(afterEventId: number): void {
+      // Le démarrage est déclenché par `onopen` (contrat R1 : le job ne
+      // commence qu'une fois le navigateur réellement à l'écoute). Filet de
+      // sécurité : si `onopen` n'arrive jamais — flux bloqué par un proxy,
+      // limite de connexions du navigateur, EventSource indisponible — on
+      // démarre quand même après un délai borné, sinon l'analyse resterait
+      // `queued` indéfiniment et l'application paraîtrait figée.
+      startFallbackTimer = setTimeout(() => {
+        startFallbackTimer = null
+        startOnce()
+      }, START_FALLBACK_MS)
+
       const client = openAnalysisEventSource(id, afterEventId, {
         onOpen: () => {
           disconnectedRef.current = false
           setConnection({ status: 'live' })
-          if (!startedRef.current) {
-            startedRef.current = true
-            void startAnalysis(id).catch(() => {
-              // Idempotent côté serveur : une erreur réseau ici n'empêche
-              // pas le flux SSE de continuer à refléter l'état réel.
-            })
-          }
+          startOnce()
         },
         onEvent: (event: AnalysisEvent) => {
           const snapshotNow = snapshotRef.current
@@ -221,6 +246,10 @@ export function useAnalysisController(
 
     return () => {
       cancelled = true
+      if (startFallbackTimer !== null) {
+        clearTimeout(startFallbackTimer)
+        startFallbackTimer = null
+      }
       sseRef.current?.close()
       sseRef.current = null
     }
