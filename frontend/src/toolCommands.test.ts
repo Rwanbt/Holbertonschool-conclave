@@ -4,7 +4,7 @@ import {
   buildToolCommand,
   reduceToolState,
 } from './toolCommands'
-import type { ToolCommandResponse, ToolName, ToolState } from './types'
+import type { ToolCommandResponse, ToolState } from './types'
 
 describe('construction des commandes /tools', () => {
   it('construit enable pour chaque outil', () => {
@@ -42,18 +42,31 @@ describe('reduceToolState', () => {
     { tool_name: 'estimate_current_analysis_cost', enabled: true, description: 'c' },
   ]
 
-  it('met à jour uniquement l’outil visé', () => {
-    const response: ToolCommandResponse = {
-      tool_name: 'measure_current_document' as ToolName,
-      enabled: false,
-    }
+  const response: ToolCommandResponse = {
+    action: 'disable',
+    message: 'Outil désactivé.',
+    tool_name: 'measure_current_document',
+    enabled: false,
+    tools: [
+      { tool_name: 'measure_current_document', enabled: false, description: 'a' },
+      { tool_name: 'estimate_current_analysis_cost', enabled: true, description: 'c' },
+    ],
+  }
+
+  it('remplace la liste locale par le catalogue complet de la réponse', () => {
     const next = reduceToolState(tools, response)
+    expect(next).not.toBe(tools)
     expect(next[0].enabled).toBe(false)
     expect(next[1].enabled).toBe(true)
-    expect(tools).not.toBe(next)
   })
 
-  it('conserve l’état d’un outil si la commande échoue (pas de réponse)', () => {
+  it('une réponse de liste répercute le catalogue renvoyé', () => {
+    const listResponse: ToolCommandResponse = { ...response, action: 'list', tool_name: null, enabled: null }
+    const next = reduceToolState(tools, listResponse)
+    expect(next).toEqual(response.tools)
+  })
+
+  it('conserve l’état d’un outil si la commande échoue (réponse absente, ex. 422)', () => {
     // En cas d'erreur réseau/422, la réponse est absente : l'état n'est jamais réduit.
     expect(tools[0].enabled).toBe(true)
     expect(tools[1].enabled).toBe(true)
