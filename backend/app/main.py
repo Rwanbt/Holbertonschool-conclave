@@ -318,17 +318,20 @@ async def stream_analysis_events(
     last_event_id = request.headers.get("last-event-id")
     if last_event_id is not None:
         try:
-            after_id = max(0, int(last_event_id))
+            after_id = max(after_id, int(last_event_id))
         except ValueError:
             after_id = 0
     if "after" in request.query_params:
         try:
-            after_id = max(0, int(request.query_params["after"]))
+            after_id = max(after_id, int(request.query_params["after"]))
         except ValueError:
             after_id = 0
 
     async def event_source() -> AsyncIterator[str]:
         sent = after_id
+        interval = settings.sse_poll_interval_ms / 1000.0
+        keepalive = settings.sse_keepalive_seconds
+        elapsed = 0.0
         while True:
             async with db.open_connection(settings.database_path) as conn:
                 current = await db.get_analysis(conn, analysis_id)
@@ -342,7 +345,11 @@ async def stream_analysis_events(
                     return
             if current["status"] in db.TERMINAL_ANALYSIS_STATUSES:
                 return
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(interval)
+            elapsed += interval
+            if keepalive and elapsed >= keepalive:
+                yield ": keep-alive\n\n"
+                elapsed = 0.0
 
     return StreamingResponse(
         event_source(),
@@ -376,11 +383,27 @@ async def apply_tool_command(
         ) from exc
 
     if action == "list":
-        raise HTTPException(
-            status_code=422,
-            detail="Invalid /tools command: use GET /api/tools for the catalogue",
+        states = await db.list_tool_states(conn)
+        tools = [toolkit.tool_state_from_row(row) for row in states]
+        return ToolCommandResponse(
+            action="list",
+            message="Catalogue des outils (états lus depuis tool_states).",
+            tool_name=None,
+            enabled=None,
+            tools=tools,
         )
 
     enabled = action == "enable"
     await db.set_tool_state(conn, tool_name, enabled)
-    return ToolCommandResponse(tool_name=tool_name, enabled=enabled)
+    states = await db.list_tool_states(conn)
+    tools = [toolkit.tool_state_from_row(row) for row in states]
+    return ToolCommandResponse(
+        action=action,
+        message=(
+            f"Outil {tool_name} {'activé' if enabled else 'désactivé'} "
+            "(état persistant)."
+        ),
+        tool_name=tool_name,
+        enabled=enabled,
+        tools=tools,
+    )

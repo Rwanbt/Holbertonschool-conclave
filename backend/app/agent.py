@@ -25,6 +25,7 @@ from . import toolkit
 from .config import Settings, get_settings
 from .llm import ProviderError, build_client
 from .schemas import AgentResponse, ExecutionUsage, ToolTraceEntry
+from .streaming import stream_chat_completion
 
 SYSTEM_PROMPT: str = (
     "Tu es un agent d'analyse documentaire du backend CONCLAVE. "
@@ -70,12 +71,22 @@ class AgentLoopResult:
     rounds: int
     stop_reason: str | None = None
     executed_tools: list[str] = field(default_factory=list)
+    live_text: str = field(default="", repr=False)
 
 
 ToolEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 """Sink de trace : `(kind, fields)` avec kind in
 {"tool.started", "tool.completed", "tool.failed"} et `fields` un dict borné
 sans le document ni le `analysis_id` (fournis par le fermeture de l'appelant).
+"""
+
+
+ResponseEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
+"""Sink de réponse live : `(kind, fields)` avec kind in
+{"agent.response.started", "agent.response.delta", "agent.response.completed",
+"agent.response.failed"} et `fields` bornés (sans document, sans JSON final).
+`run_agent_loop` n'émet que `started`/`delta` ; `completed`/`failed` sont
+émis par l'appelant après validation Pydantic du JSON final.
 """
 
 
@@ -90,8 +101,18 @@ async def run_agent_loop(
     agent_role: str = "assistant",
     get_connection: Callable[[], Awaitable[Any]] | None = None,
     max_output_tokens: int | None = None,
+    response_event_sink: ResponseEventSink | None = None,
+    stream_final_envelope: bool = False,
 ) -> AgentLoopResult:
-    """Boucle générique bornée. `get_connection` alimente l'état SQLite des outils."""
+    """Boucle générique bornée. `get_connection` alimente l'état SQLite des outils.
+
+    Avec `stream_final_envelope=True` (Palier 4), chaque appel MiniMax est
+    streamé et la réponse finale doit être l'enveloppe
+    `<LIVE_RESPONSE>…</LIVE_RESPONSE><FINAL_JSON>…</FINAL_JSON>` : le texte live
+    est diffusé par `response_event_sink`, le JSON final est extrait dans
+    `answer`, et une violation de protocole arrête proprement la boucle
+    (`stop_reason="protocol_error"`) sans exécuter d'outil.
+    """
     output_budget = max_output_tokens or settings.minimax_max_output_tokens
     executed_calls: set[tuple[str, str]] = set()
     trace: list[ToolTraceEntry] = []
@@ -103,6 +124,7 @@ async def run_agent_loop(
     any_usage = False
     total_latency_ms = 0
     answer: str | None = None
+    live_text = ""
     stop = False
     stop_reason: str | None = None
 
@@ -111,16 +133,31 @@ async def run_agent_loop(
         for round_number in range(1, max_rounds + 1):
             started = time.monotonic()
             try:
-                completion = await client.chat.completions.create(
-                    model=settings.minimax_model,
-                    messages=messages,
-                    max_completion_tokens=output_budget,
-                    temperature=0.3,
-                    n=1,
-                    tools=registry_tool_schemas(),
-                    tool_choice="auto",
-                    extra_body={"thinking": {"type": "disabled"}},
-                )
+                if stream_final_envelope:
+                    completion = await stream_chat_completion(
+                        client,
+                        model=settings.minimax_model,
+                        messages=messages,
+                        max_completion_tokens=output_budget,
+                        temperature=0.3,
+                        n=1,
+                        tools=registry_tool_schemas(),
+                        tool_choice="auto",
+                        settings=settings,
+                        live_sink=response_event_sink,
+                        response_role=agent_role,
+                    )
+                else:
+                    completion = await client.chat.completions.create(
+                        model=settings.minimax_model,
+                        messages=messages,
+                        max_completion_tokens=output_budget,
+                        temperature=0.3,
+                        n=1,
+                        tools=registry_tool_schemas(),
+                        tool_choice="auto",
+                        extra_body={"thinking": {"type": "disabled"}},
+                    )
             except Exception as exc:  # noqa: BLE001 - toute cause mène au 502
                 raise ProviderError(
                     f"MiniMax agent request failed: {exc.__class__.__name__}"
@@ -139,11 +176,23 @@ async def run_agent_loop(
             message = completion.choices[0].message
             tool_calls = message.tool_calls or []
 
+            if stream_final_envelope:
+                if completion.protocol_error is not None:
+                    live_text = completion.live_text or live_text
+                    stop = True
+                    stop_reason = "protocol_error"
+                    break
+                final_json = (completion.final_json or "").strip()
+                if completion.live_text:
+                    live_text = completion.live_text
+            else:
+                final_json = ""
+
             if not tool_calls:
                 content = (message.content or "").strip()
-                if not content:
+                if not content and not final_json:
                     raise ProviderError("MiniMax agent returned an empty answer")
-                answer = content
+                answer = final_json or content
                 break
 
             messages.append(
@@ -339,6 +388,7 @@ async def run_agent_loop(
         rounds=round_number,
         stop_reason=stop_reason,
         executed_tools=executed_tools,
+        live_text=live_text,
     )
 
 

@@ -74,6 +74,31 @@ class Settings(BaseSettings):
         60.0, gt=0, description="Délai maximal de l'analyse entière."
     )
 
+    sse_poll_interval_ms: int = Field(
+        100,
+        ge=10,
+        le=2000,
+        description="Fréquence de scrutation SQLite de la route SSE, en millisecondes.",
+    )
+    sse_keepalive_seconds: int = Field(
+        10,
+        ge=1,
+        le=300,
+        description="Intervalle du commentaire SSE de garde-fou `: keep-alive`, en secondes.",
+    )
+    stream_max_draft_chars: int = Field(
+        4000,
+        ge=100,
+        le=20000,
+        description="Taille maximale du texte live diffusé (brouillon) par rôle et analyse.",
+    )
+    stream_delta_batch_chars: int = Field(
+        32,
+        ge=4,
+        le=512,
+        description="Taille cible d'un événement agent.response.delta, en caractères.",
+    )
+
     @field_validator("disabled_tools")
     @classmethod
     def disabled_tools_must_be_listed(cls, value: str) -> str:
