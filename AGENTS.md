@@ -75,9 +75,9 @@ Voir OUTILS.md pour les types exacts (`DocumentMetrics`, `SecurityFinding`,
   au modèle mais son exécuteur renvoie `error_code: "tool_disabled"`.
 - **Erreurs d'outil ≠ 500** : chaque erreur d'outil devient une entrée de
   trace `status="error"` présentée au modèle, qui décide de la suite.
-- **Boucle bornée** : `MINIMAX_MAX_TOOL_ROUNDS` appels maximum ; appel
-  identique répété (`repeated_tool_call`) ou limite atteinte
-  (`max_rounds_reached`) arrêtent proprement la boucle.
+- **Boucle bornée** : `MINIMAX_MAX_TOOL_ROUNDS` appels maximum. Un appel
+  identique déjà réussi réutilise son résultat sans réexécution ; seule la
+  limite (`max_rounds_reached`) arrête une répétition persistante.
 
 ## Schéma de la boucle
 
@@ -118,8 +118,8 @@ modification des prompts système, des schémas de sortie ou des garde-fous doit
 AVOCAT :
 Tu es l'expert AVOCAT de l'analyse documentaire CONCLAVE.
 Le document te parvient dans le message utilisateur.
-Tu peux utiliser les outils serveur sans argument (métriques, indices
-de sécurité, coût) pour étayer ton argumentaire.
+Tu peux utiliser les outils serveur sans argument (métriques et indices
+de sécurité) pour étayer ton argumentaire.
 Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les
 tour à tour.
 Rédige une plaidoirie de la solution proposée par le document, en t'appuyant
@@ -137,8 +137,8 @@ Aucun texte hors de ces deux balises.
 PROCUREUR :
 Tu es l'expert PROCUREUR de l'analyse documentaire CONCLAVE.
 Le document te parvient dans le message utilisateur.
-Tu peux utiliser les outils serveur sans argument (métriques, indices
-de sécurité, coût) pour étayer ton réquisitoire.
+Tu peux utiliser les outils serveur sans argument (métriques et indices
+de sécurité) pour étayer ton réquisitoire.
 Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les
 tour à tour.
 Démontre les risques, faiblesses et objections que le document soulève,
@@ -160,6 +160,7 @@ Tu dois d'abord observer les métriques du document, puis estimer le coût
 d'une analyse, puis seulement conclure.
 Un seul outil par tour : au premier tour, demande les métriques ; au tour
 suivant, demande l'estimation du coût.
+Dès que ces deux outils ont réussi, conclus sans demander d'autre outil.
 Tu ne produis JAMAIS une conclusion chiffrée sans avoir observé les métriques
 réelles ni une estimation de coût sans données réelles : si ces mesures
 manquent, tu le signales dans summary et findings sans inventer de valeur.
@@ -177,8 +178,6 @@ ARBITRE :
 Tu es l'ARBITRE de l'analyse documentaire CONCLAVE.
 Tu reçois le document et les sorties validées des experts (avocat,
 procureur, comptable).
-Tu peux aussi utiliser les outils serveur sans argument si tu dois vérifier
-un chiffre, mais ce n'est pas obligatoire.
 Départage les désaccords, puis rends une décision finale.
 Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement
 avec l'enveloppe suivante :
@@ -240,7 +239,10 @@ Arbitre (document + sorties validées + experts absents) → ArbiterVerdict vali
 
 ## Garde-fous Palier 4
 
-- **Un seul outil par tour** pour les experts et l'Arbitre : si MiniMax demande
+- **Outils limités par rôle** : Avocat et Procureur reçoivent métriques + indices
+  de sécurité ; le Comptable reçoit métriques + coût ; l'Arbitre ne reçoit
+  aucun outil et travaille uniquement sur les sorties validées.
+- **Un seul outil par tour** pour les experts : si MiniMax demande
   plusieurs outils, seul le premier est exécuté, les autres reçoivent
   `one_tool_per_round` (chaque `tool_call_id` est toujours répondu).
 - **Validation structurée** : toute sortie LLM passe par `AgentOutput` ou
@@ -254,8 +256,11 @@ Arbitre (document + sorties validées + experts absents) → ArbiterVerdict vali
 - **Garde-fous de temps** : `expert_timeout_seconds` (90), `arbiter_timeout_seconds`
   (45), `analysis_timeout_seconds` (180). Codes : `expert_timeout`,
   `arbiter_timeout`, `analysis_timeout`.
-- **Boucle bornée** : `AGENT_MAX_ROUNDS` (5) ; codes `max_rounds_reached` et
-  `repeated_tool_call` arrêtent proprement.
+- **Appel identique récupérable** : le résultat d'un outil déterministe ayant
+  déjà réussi est réutilisé sans nouvelle exécution, puis le modèle est invité
+  à conclure ou à choisir un autre outil. Un échec antérieur reste retentable.
+- **Boucle bornée** : `AGENT_MAX_ROUNDS` (5) reste l'arrêt ultime contre une
+  répétition persistante (`max_rounds_reached`).
 - **Outils désactivés pendant une analyse** : la configuration est figée dans
   `analysis_tool_states` à la création ; un outil désactivé → `tool_disabled`
   (trace + événement `tool.failed`), sans 500.

@@ -159,13 +159,16 @@ La boucle générique `run_agent_loop` (backend/app/agent.py) est partagée : le
 wrapper public `run_agent` (P3) et chaque expert/arbitre (P4) l'utilisent avec
 leur propre prompt système et leur propre plafond de tours.
 
-MiniMax reçoit le prompt système et les trois schémas d'outils (jamais le
-document). Il choisit seul d'appeler un outil (`tool_choice="auto"`) ; le
+MiniMax reçoit le prompt système et uniquement les schémas pertinents pour le
+rôle (jamais le document). Il choisit seul d'appeler un outil
+(`tool_choice="auto"`) ; le
 serveur valide le nom (`unknown_tool` sinon) et les arguments
 (`invalid_arguments` sinon), vérifie l'état SQLite courant (`tool_disabled`
 sinon), exécute l'adaptateur réel, puis renvoie le résultat dans un message
 `role="tool"` avec `tool_call_id`. La boucle fait au plus `AGENT_MAX_ROUNDS`
-tours ; un appel identique répété (`repeated_tool_call`), la limite atteinte
+tours. Un appel identique ayant déjà réussi réutilise son résultat en cache et
+invite le modèle à conclure, sans réexécuter l'outil ; un appel précédemment
+échoué reste retentable après changement du contexte. La limite atteinte
 (`max_rounds_reached`) ou un dépassement de temps (`expert_timeout`,
 `arbiter_timeout`, `analysis_timeout`) arrête proprement l'étape concernée.
 Les experts utilisent la règle **un seul outil par tour** (`one_tool_per_round`) :
@@ -196,10 +199,10 @@ avant diffusion, avec une séquence strictement croissante par rôle.
 | Composant | Métriques | Indices sécurité | Estimation coût | Appel LLM |
 | --- | :---: | :---: | :---: | :---: |
 | Agent P3 | appel | appel | appel | boucle `tool_calls` |
-| Avocat (P4) | appel | appel | appel | boucle d'outils + `AgentOutput` |
-| Procureur (P4) | appel | appel | appel | boucle d'outils + `AgentOutput` |
+| Avocat (P4) | appel | appel | — | boucle d'outils + `AgentOutput` |
+| Procureur (P4) | appel | appel | — | boucle d'outils + `AgentOutput` |
 | Comptable (P4) | appel | — | appel | boucle d'outils (métriques puis coût) + `AgentOutput` |
-| Arbitre (P4) | appel (optionnel) | — | — | boucle d'outils + `ArbiterVerdict` |
+| Arbitre (P4) | — | — | — | sorties validées + `ArbiterVerdict` |
 
 ## Décision de scope
 

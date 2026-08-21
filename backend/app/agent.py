@@ -144,7 +144,14 @@ async def run_agent_loop(
     rappeler un outil ni répéter l'enveloppe défectueuse.
     """
     output_budget = max_output_tokens or settings.minimax_max_output_tokens
-    executed_calls: set[tuple[str, str]] = set()
+    # Les outils actuels sont locaux, déterministes et sans effet de bord. Une
+    # répétition exacte d'un appel déjà réussi peut donc réutiliser son résultat
+    # sans refaire le calcul ni invalider tout l'expert. Seuls les succès sont
+    # mémorisés : un appel échoué (pré-requis manquant, par exemple) doit rester
+    # retentable après que le contexte a changé.
+    successful_call_cache: dict[
+        tuple[str, str], tuple[Any, dict[str, Any] | None]
+    ] = {}
     trace: list[ToolTraceEntry] = []
     executed_tools: list[str] = []
     tool_schemas = registry_tool_schemas(allowed_tools)
@@ -408,6 +415,7 @@ async def run_agent_loop(
             )
 
             deferred = tool_calls[1:] if one_tool_per_round else []
+            reused_successful_call = False
             for index, call in enumerate(tool_calls):
                 if deferred and index > 0:
                     _append_trace_error(
@@ -499,26 +507,35 @@ async def run_agent_loop(
                     continue
 
                 call_key = (name, json.dumps(arguments, sort_keys=True))
-                if call_key in executed_calls:
-                    _append_trace_error(
-                        trace,
-                        name,
-                        "repeated_tool_call",
-                        {"tool": name, "identical_call": True},
+                cached = successful_call_cache.get(call_key)
+                if cached is not None:
+                    cached_payload, cached_output_summary = cached
+                    output_summary = dict(cached_output_summary or {})
+                    output_summary["cache_reused"] = True
+                    trace.append(
+                        ToolTraceEntry(
+                            sequence=len(trace) + 1,
+                            tool_name=name,
+                            status="success",
+                            input_summary={"tool": name, "cache_reused": True},
+                            output_summary=output_summary,
+                            duration_ms=0,
+                            error_code=None,
+                        )
                     )
                     if tool_event_sink is not None:
                         await tool_event_sink(
-                            "tool.failed",
+                            "tool.completed",
                             {
                                 "agent_role": agent_role,
                                 "llm_round": round_number,
                                 "sequence": len(trace),
                                 "tool_name": name,
-                                "status": "error",
-                                "input_summary": {"tool": name, "identical_call": True},
-                                "output_summary": None,
+                                "status": "success",
+                                "input_summary": {"tool": name, "cache_reused": True},
+                                "output_summary": output_summary,
                                 "duration_ms": 0,
-                                "error_code": "repeated_tool_call",
+                                "error_code": None,
                             },
                         )
                     messages.append(
@@ -526,24 +543,11 @@ async def run_agent_loop(
                             "role": "tool",
                             "tool_call_id": call.id,
                             "name": name,
-                            "content": json.dumps(
-                                {
-                                    "error": {
-                                        "code": "repeated_tool_call",
-                                        "message": (
-                                            "Identical tool call repeated; "
-                                            "stopping to avoid an infinite loop."
-                                        ),
-                                    }
-                                },
-                                ensure_ascii=False,
-                            ),
+                            "content": json.dumps(cached_payload, ensure_ascii=False),
                         }
                     )
-                    stop = True
-                    stop_reason = "repeated_tool_call"
+                    reused_successful_call = True
                     continue
-                executed_calls.add(call_key)
 
                 if tool_event_sink is not None:
                     await tool_event_sink(
@@ -569,6 +573,7 @@ async def run_agent_loop(
                 )
                 if status == "success":
                     executed_tools.append(name)
+                    successful_call_cache[call_key] = (payload, output_summary)
                 if tool_event_sink is not None:
                     await tool_event_sink(
                         "tool.completed" if status == "success" else "tool.failed",
@@ -590,6 +595,19 @@ async def run_agent_loop(
                         "tool_call_id": call.id,
                         "name": name,
                         "content": json.dumps(payload, ensure_ascii=False),
+                    }
+                )
+
+            if reused_successful_call and not stop:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Ce résultat d'outil avait déjà été obtenu et vient d'être "
+                            "réutilisé. Ne redemande pas exactement le même appel. "
+                            "Utilise les résultats disponibles pour conclure, ou demande "
+                            "un autre outil seulement s'il est encore nécessaire."
+                        ),
                     }
                 )
 

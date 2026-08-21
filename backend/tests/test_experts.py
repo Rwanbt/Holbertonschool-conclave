@@ -107,6 +107,55 @@ class TestFullHappyPath:
         assert result.usage.input_tokens is not None
         assert result.usage.llm_rounds >= 5  # 3 experts multi-tours + arbitre
 
+    def test_each_role_only_receives_its_relevant_tool_schemas(
+        self, tmp_path, patch_minimax
+    ) -> None:
+        scripts = scripted_experts(
+            comptable_extra=[final_completion(agent_output_json("comptable", score=70))]
+        )
+        scripts.update(scripted_arbiter())
+        client = FakeClient(scripts)
+        patch_minimax(client)
+
+        _run_analysis(tmp_path, _settings(tmp_path), client)
+
+        schemas_by_role: dict[str, set[str]] = {}
+        for kwargs in client.created_kwargs:
+            messages = kwargs.get("messages", [])
+            system = next(
+                (message.get("content", "") for message in messages if message.get("role") == "system"),
+                "",
+            ).upper()
+            role = next(
+                (
+                    candidate
+                    for candidate in ("arbitre", "avocat", "procureur", "comptable")
+                    if candidate.upper() in system
+                ),
+                None,
+            )
+            if role is None or role in schemas_by_role:
+                continue
+            schemas_by_role[role] = {
+                schema["function"]["name"] for schema in kwargs.get("tools", [])
+            }
+
+        assert schemas_by_role == {
+            "avocat": {
+                "measure_current_document",
+                "find_security_indicators_in_current_document",
+            },
+            "procureur": {
+                "measure_current_document",
+                "find_security_indicators_in_current_document",
+            },
+            "comptable": {
+                "measure_current_document",
+                "estimate_current_analysis_cost",
+            },
+            "arbitre": set(),
+        }
+
     def test_events_are_persisted_ordered_and_document_free(self, tmp_path, patch_minimax) -> None:
         scripts = scripted_experts(
             comptable_extra=[final_completion(agent_output_json("comptable", score=70))]
@@ -375,7 +424,9 @@ class TestGuardrails:
         assert comptable.error_code == "max_rounds_reached"
         assert result.status in {"degraded", "failed"}
 
-    def test_repeated_identical_call_stops(self, tmp_path, patch_minimax) -> None:
+    def test_comptable_recovers_from_repeated_successful_call(
+        self, tmp_path, patch_minimax
+    ) -> None:
         scripts = scripted_experts()
         scripts["comptable"] = [
             FakeCompletion(
@@ -384,6 +435,10 @@ class TestGuardrails:
             FakeCompletion(
                 [FakeChoice(FakeMessage(content=None, tool_calls=[tool_call("measure_current_document", "m2")]))]
             ),
+            FakeCompletion(
+                [FakeChoice(FakeMessage(content=None, tool_calls=[tool_call("estimate_current_analysis_cost", "c1")]))]
+            ),
+            final_completion(agent_output_json("comptable", score=70)),
         ]
         scripts.update(scripted_arbiter())
         client = FakeClient(scripts)
@@ -392,8 +447,14 @@ class TestGuardrails:
         result = _run_analysis(tmp_path, _settings(tmp_path), client)
 
         comptable = [e for e in result.experts if e.role == "comptable"][0]
-        assert comptable.error_code == "repeated_tool_call"
-        assert comptable.executed_tools == ["measure_current_document"]
+        assert comptable.error_code is None
+        assert comptable.output is not None
+        assert comptable.executed_tools == [
+            "measure_current_document",
+            "estimate_current_analysis_cost",
+        ]
+        assert comptable.trace[1].status == "success"
+        assert comptable.trace[1].output_summary["cache_reused"] is True
 
     def test_expert_timeout(self, tmp_path, patch_minimax) -> None:
         settings = _settings(tmp_path, expert_timeout_seconds=0.2)

@@ -56,6 +56,22 @@ _COMPTABLE_REQUIRED_TOOLS: frozenset[str] = frozenset(
     {"measure_current_document", "estimate_current_analysis_cost"}
 )
 
+_ROLE_TOOL_ALLOWLIST: dict[ExpertRole, frozenset[str]] = {
+    "avocat": frozenset(
+        {
+            "measure_current_document",
+            "find_security_indicators_in_current_document",
+        }
+    ),
+    "procureur": frozenset(
+        {
+            "measure_current_document",
+            "find_security_indicators_in_current_document",
+        }
+    ),
+    "comptable": _COMPTABLE_REQUIRED_TOOLS,
+}
+
 _EXPERT_ENVELOPE: str = (
     "Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement "
     "avec l'enveloppe suivante : "
@@ -74,8 +90,8 @@ SYSTEM_PROMPTS: dict[ExpertRole, str] = {
         "Le document te parvient dans le message utilisateur. "
         + security.DOCUMENT_IS_DATA_RULE
         + " "
-        "Tu peux utiliser les outils serveur sans argument (métriques, indices "
-        "de sécurité, coût) pour étayer ton argumentaire. "
+        "Tu peux utiliser les outils serveur sans argument (métriques et indices "
+        "de sécurité) pour étayer ton argumentaire. "
         "Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les "
         "tour à tour. "
         "Rédige une plaidoirie de la solution proposée par le document, en t'appuyant "
@@ -87,8 +103,8 @@ SYSTEM_PROMPTS: dict[ExpertRole, str] = {
         "Le document te parvient dans le message utilisateur. "
         + security.DOCUMENT_IS_DATA_RULE
         + " "
-        "Tu peux utiliser les outils serveur sans argument (métriques, indices "
-        "de sécurité, coût) pour étayer ton réquisitoire. "
+        "Tu peux utiliser les outils serveur sans argument (métriques et indices "
+        "de sécurité) pour étayer ton réquisitoire. "
         "Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les "
         "tour à tour. "
         "Démontre les risques, faiblesses et objections que le document soulève, "
@@ -104,6 +120,7 @@ SYSTEM_PROMPTS: dict[ExpertRole, str] = {
         "d'une analyse, puis seulement conclure. "
         "Un seul outil par tour : au premier tour, demande les métriques ; au tour "
         "suivant, demande l'estimation du coût. "
+        "Dès que ces deux outils ont réussi, conclus sans demander d'autre outil. "
         "Tu ne produis JAMAIS une conclusion chiffrée sans avoir observé les métriques "
         "réelles ni une estimation de coût sans données réelles : si ces mesures "
         "manquent, tu le signales dans summary et findings sans inventer de valeur. "
@@ -127,8 +144,6 @@ ARBITER_SYSTEM_PROMPT: str = (
     "Tu es l'ARBITRE de l'analyse documentaire CONCLAVE. "
     "Tu reçois le document et les sorties validées des experts (avocat, "
     "procureur, comptable). "
-    "Tu peux aussi utiliser les outils serveur sans argument si tu dois vérifier "
-    "un chiffre, mais ce n'est pas obligatoire. "
     "Départage les désaccords, puis rends une décision finale. "
     + security.DOCUMENT_IS_DATA_RULE
     + " "
@@ -543,10 +558,15 @@ async def run_expert(
     # réellement activés pour cette analyse. Une conclusion prématurée est
     # renvoyée dans la boucle agentique afin que le modèle choisisse l'outil
     # manquant au tour suivant ; elle n'est pas « réparée » en JSON sans preuve.
+    role_allowed_tools = (
+        None
+        if allowed_tools is None
+        else (allowed_tools & _ROLE_TOOL_ALLOWLIST[role])
+    )
     required_comptable_tools = (
         _COMPTABLE_REQUIRED_TOOLS
-        if allowed_tools is None
-        else (_COMPTABLE_REQUIRED_TOOLS & allowed_tools)
+        if role_allowed_tools is None
+        else (_COMPTABLE_REQUIRED_TOOLS & role_allowed_tools)
     )
     required_tools_before_final = (
         required_comptable_tools if role == "comptable" else frozenset()
@@ -565,7 +585,7 @@ async def run_expert(
             max_output_tokens=settings.expert_max_output_tokens,
             response_event_sink=response_sink,
             stream_final_envelope=True,
-            allowed_tools=allowed_tools,
+            allowed_tools=role_allowed_tools,
             round_event_sink=round_sink,
             required_tools_before_final=required_tools_before_final,
         )
@@ -944,7 +964,9 @@ async def run_arbiter(
             max_output_tokens=settings.expert_max_output_tokens,
             response_event_sink=response_sink,
             stream_final_envelope=True,
-            allowed_tools=allowed_tools,
+            # L'arbitre dispose déjà des sorties structurées et validées. Ne
+            # lui exposer aucun outil évite des tours et répétitions inutiles.
+            allowed_tools=frozenset(),
             round_event_sink=round_sink,
         )
 
@@ -1118,14 +1140,12 @@ async def run_analysis(
 
     async with (await get_connection()) as conn:
         tool_rows = await db.list_analysis_tool_states(conn, analysis_id)
-    # Repli : une analyse créée sans passer par `POST /api/analyses` (tests
-    # unitaires appelant `run_analysis`/`run_expert` directement) n'a jamais
-    # de configuration figée. `allowed_tools=None` retombe alors sur le
-    # registre global `tool_states`, comme avant R1.
-    allowed_tools = (
-        frozenset(row["tool_name"] for row in tool_rows if row["enabled"])
-        if tool_rows
-        else None
+        # Repli pour les appels directs/tests sans snapshot : lire le registre
+        # global au lieu de perdre le filtrage défensif par rôle.
+        if not tool_rows:
+            tool_rows = await db.list_tool_states(conn)
+    allowed_tools = frozenset(
+        row["tool_name"] for row in tool_rows if row["enabled"]
     )
 
     results: list[ExpertRunResult] = []
