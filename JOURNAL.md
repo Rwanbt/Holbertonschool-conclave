@@ -1,4 +1,126 @@
-# Journal
+# JOURNAL — usages critiques de l'IA
+
+Ce journal distingue ce qui a été demandé à l'IA, ce qu'elle a produit de
+faux, fragile ou inutile, et la décision humaine prise ensuite. Les anciens
+comptes rendus techniques sont conservés plus bas comme traces chronologiques.
+
+## 2026-08-21 — Une répétition d'outil ne devait pas invalider un expert
+
+- **Demande faite à l'IA :** diagnostiquer pourquoi une analyse réelle finissait
+  `degraded` alors que le Comptable avait déjà mesuré le document et calculé le
+  coût.
+- **Proposition médiocre identifiée :** la première boucle générée traitait
+  tout appel identique comme `repeated_tool_call` terminal. C'était présenté
+  comme une protection contre les boucles infinies, mais `AGENT_MAX_ROUNDS`
+  bornait déjà la boucle. Une simple répétition MiniMax supprimait donc un
+  expert pourtant exploitable.
+- **Correction ou refus :** nous avons refusé cet arrêt immédiat. Un résultat
+  déterministe déjà réussi est maintenant réutilisé sans réexécution ; un
+  échec reste retentable si son prérequis change. Les outils sont aussi limités
+  par rôle : le Comptable ne voit que métriques et coût, l'Arbitre aucun outil.
+- **Preuve :** rejeu du document exact : `completed`, 3 experts valides,
+  10 tours et 25 423 tokens, contre `degraded`, 13 tours et 33 684 tokens.
+
+## 2026-08-21 — Réparer le JSON avec le même protocole répétait le défaut
+
+- **Demande faite à l'IA :** corriger les `protocol_error` MiniMax provoqués par
+  des balises `<FINAL_JSON>` absentes ou non fermées.
+- **Proposition médiocre identifiée :** redemander au modèle, en streaming et
+  avec les outils encore exposés, de reproduire exactement la même enveloppe.
+  Cette « réparation » répétait la cause du défaut et pouvait déclencher de
+  nouveaux appels d'outils.
+- **Correction ou refus :** réparation séparée, non streamée, sans outil, à
+  température zéro, avec `response_format=json_object`, le JSON Schema Pydantic
+  exact et deux tentatives bornées. Le prompt système original est remplacé par
+  un normalisateur dédié pour éviter les consignes contradictoires.
+- **Ce que nous n'avons pas prétendu :** MiniMax accepte un paramètre de schéma
+  sans toujours le respecter. La validation Pydantic côté serveur reste donc
+  l'autorité finale.
+
+## 2026-08-21 — Les tarifs absents ne sont pas une panne métier
+
+- **Demande faite à l'IA :** résoudre l'échec du Comptable lorsque
+  `MINIMAX_INPUT_USD_PER_MILLION` ou `MINIMAX_OUTPUT_USD_PER_MILLION` manque.
+- **Proposition médiocre identifiée :** rendre les deux tarifs obligatoires au
+  démarrage ou lever `UnknownPricingError`. Cela transformait une donnée
+  facultative en indisponibilité de toute l'analyse.
+- **Correction ou refus :** les valeurs recommandées `0.30/1.20` sont
+  documentées, mais l'outil renvoie `estimated_cost_usd=null` et
+  `pricing_configured=false` lorsqu'elles sont absentes. Le Comptable signale
+  l'indisponibilité sans inventer de prix et l'analyse continue.
+- **Amélioration supplémentaire :** l'ancien calcul estimait un seul appel de
+  300 tokens. Il couvre maintenant les trois experts, l'Arbitre, les tours et
+  les réparations configurées, avec ses hypothèses dans la réponse.
+
+## 2026-08-20 — Un effet machine à écrire n'est pas du streaming
+
+- **Demande faite à l'IA :** rendre les réponses des agents visibles en temps
+  réel et restaurables après F5.
+- **Proposition médiocre refusée :** révéler une réponse déjà complète avec un
+  timer côté navigateur. Visuellement convaincant, mais faux : aucune preuve
+  que les données arrivaient réellement du fournisseur.
+- **Correction ou refus :** les deltas MiniMax sont streamés, validés, bornés,
+  persistés en SQLite puis diffusés par SSE avec identifiants rejouables. Le
+  frontend concatène les séquences reçues sans animation artificielle. Le
+  panneau de démonstration affiche leur chronologie avant `completed`.
+- **Dette évitée :** nous avons accepté plus de code de reprise SSE plutôt que
+  de présenter une animation comme une propriété réseau inexistante.
+
+## 2026-08-20 — Un snapshot terminal ne prouve pas que le navigateur a vu le parcours
+
+- **Demande faite à l'IA :** corriger un stepper qui passait directement de la
+  soumission au verdict et une analyse parfois bloquée en `queued`.
+- **Proposition médiocre identifiée :** déduire l'étape visuelle uniquement du
+  statut final du snapshot et démarrer le job avant l'ouverture du SSE. Sur une
+  analyse rapide, le navigateur perdait les transitions qu'il devait démontrer.
+- **Correction ou refus :** le POST crée et fige l'analyse sans la démarrer. Le
+  frontend ouvre le SSE puis appelle `/start`; le serveur effectue un
+  compare-and-set idempotent. Le stepper avance sur les événements réellement
+  observés, tandis que snapshot et historique paginé restaurent un F5.
+- **Compromis :** un délai de secours démarre quand même le job si `onopen`
+  n'arrive jamais, avec tentatives bornées et idempotence serveur.
+
+## 2026-08-20 — Détecter une injection ne suffit pas à la bloquer
+
+- **Demande faite à l'IA :** gérer un document contenant « ignore les
+  instructions précédentes » et expliquer la décision à l'utilisateur.
+- **Proposition médiocre refusée :** présenter une liste de regex comme une
+  protection contre l'injection de prompt. Elle est contournable par une autre
+  langue, une translittération ou un encodage.
+- **Correction ou refus :** le détecteur ne sert qu'à l'observabilité. Les
+  barrières sont structurelles : nonce imprévisible autour du document, outils
+  figés côté serveur et sans argument, clé absente du prompt, SQL paramétré et
+  sortie Pydantic stricte.
+- **Limite assumée :** une injection peut encore dégrader la qualité du texte
+  produit par un expert, mais elle ne peut pas étendre ses capacités serveur.
+
+## 2026-08-19 — Partager les types ne remplace pas la validation runtime
+
+- **Demande faite à l'IA :** connecter le frontend TypeScript aux snapshots et
+  événements SSE FastAPI.
+- **Proposition médiocre identifiée :** caster directement les réponses HTTP
+  vers les interfaces TypeScript. Un cast rassure le compilateur mais ne
+  contrôle aucune donnée reçue.
+- **Correction ou refus :** validateurs runtime stricts pour snapshots,
+  verdicts et événements ; les événements inconnus ou malformés sont signalés
+  et ignorés sans effacer l'état valide. Les tests couvrent les contrats des
+  deux côtés.
+
+## Carte bonus — trois dettes proposées par l'IA et refusées
+
+1. **Arrêt au premier appel d'outil répété** — remplacé dans
+   `backend/app/agent.py` par la réutilisation du dernier succès, car la limite
+   de tours suffit contre une boucle.
+2. **Réparation avec la même enveloppe streamée** — remplacée dans
+   `backend/app/experts.py` par un normalisateur JSON isolé, car répéter le
+   protocole fautif ne le rend pas plus fiable.
+3. **Faux streaming par timer** — refusé dans le frontend au profit des deltas
+   SSE persistés (`backend/app/streaming.py`, `frontend/src/liveResponses.ts`),
+   car une animation ne démontre ni transport réel ni reprise après F5.
+
+---
+
+# Historique technique antérieur
 
 ## 2026-08-20 — R1 : streaming réel et switches indépendants des outils
 

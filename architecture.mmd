@@ -1,34 +1,30 @@
 flowchart TD
-    U["Utilisateur"] --> F["Front web<br/>React + TypeScript"]
-    F -->|"POST /api/analyses<br/>texte brut"| API["API FastAPI<br/>validation 1..12000"]
-    API -->|"201 : analysis_id"| F
-    F -->|"GET /api/analyses/{id}/events<br/>SSE rejouable"| SSE["Contrôleur SSE"]
-    F -->|"GET /api/tools<br/>POST /api/tool-commands"| API
+    U["Utilisateur"] --> F["React 18 + TypeScript<br/>stepper · outils · diagnostics"]
+    F -->|"POST /api/analyses<br/>document texte 1..12000"| API["FastAPI<br/>validation · limites · CORS"]
+    API -->|"201 analysis_id<br/>configuration figée"| F
+    F -->|"POST /start idempotent"| API
+    F <-->|"snapshot + historique paginé<br/>SSE rejouable par event id"| API
 
-    subgraph B["Backend Python"]
-        API --> O["Orchestrateur asyncio<br/>run_analysis"]
+    subgraph BACK["Backend mono-instance"]
+        API --> DB[("SQLite WAL<br/>analyses · experts · outils · événements")]
+        API --> O["Orchestrateur asyncio<br/>3 experts en parallèle"]
         O --> A["Avocat"]
         O --> P["Procureur"]
         O --> C["Comptable"]
-        A -->|"boucle d'outils"| LOOP["Boucle générique<br/>run_agent_loop"]
+        A --> LOOP["run_agent_loop<br/>tours et temps bornés"]
         P --> LOOP
         C --> LOOP
-        LOOP --> EX["Exécuteur d'outils<br/>état SQLite vérifié"]
-        EX --> T["Outils déterministes<br/>métriques · indices · coût"]
-        LOOP --> G["Passerelle LLM"]
-        VAL["Validation<br/>AgentOutput / ArbiterVerdict<br/>+ 1 réparation"] --> R["Arbitre"]
-        A --> VAL
+        LOOP --> EXEC["Exécuteur local<br/>liste figée + cache des succès"]
+        EXEC --> TOOLS["Outils sans argument<br/>métriques · sécurité · coût"]
+        LOOP <-->|"deltas réels + tool calls"| MM["MiniMax-M3"]
+        A --> VAL["Validation Pydantic AgentOutput<br/>normalisation JSON bornée"]
         P --> VAL
         C --> VAL
-        VAL --> R
-        R --> LOOP
-        LOOP -->|"résultats réels"| G
-        R -->|"verdict validé"| SNAP["Snapshot SQLite"]
-        LOOP -->|"événements + traces"| DB[("SQLite<br/>analyses · expert_runs<br/>tool_events · analysis_events<br/>tool_states")]
-        SNAP --> DB
-        DB -->|"backlog par id"| SSE
-        DB -->|"état des outils"| API
+        VAL --> R["Arbitre sans outil<br/>sur ≥ 2 experts valides"]
+        R <-->|"deltas réels"| MM
+        R --> VERDICT["Validation ArbiterVerdict"]
+        VERDICT --> DB
+        LOOP -->|"tours · deltas · traces"| DB
+        DB --> SSE["Contrôleur SSE<br/>backlog · keepalive · terminal"]
+        SSE --> API
     end
-
-    G --> X["API Minimax<br/>MiniMax-M3"]
-    SSE -->|"SSE typé + terminal"| F
