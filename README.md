@@ -1,4 +1,4 @@
-# CONCLAVE — Palier 4 « Le Contrat Conclave » + R1 (streaming réel, outils indépendants)
+# CONCLAVE v1.0 — trois lectures contradictoires, un verdict exploitable
 
 Dès l'ouverture, le front affiche le stepper et les **trois switches d'outils**
 (indépendants, persistants, chargés automatiquement). Le document est ensuite
@@ -13,8 +13,10 @@ snapshot et l'historique JSON paginé (`GET …/events/history`) sont chargés e
 parallèle, et le flux SSE ne rouvre jamais depuis zéro ni pour une analyse déjà
 terminale.
 
-- **Front** : React + TypeScript + Vite dans `frontend/` (branche `erwan`).
-- **Back** : FastAPI + Python dans `backend/` (branche `yo`, travail de Yohan).
+- **Front** : React 18 + TypeScript + Vite dans `frontend/`.
+- **Back** : FastAPI + Python, SQLite et MiniMax-M3 dans `backend/`.
+- **Livraison** : [`JOURNAL.md`](JOURNAL.md) documente les usages et refus de
+  l'IA ; [`DEMO.md`](DEMO.md) contient le parcours de soutenance minuté.
 
 ## Prérequis
 
@@ -27,7 +29,7 @@ terminale.
 ```bash
 git clone https://github.com/Rwanbt/Holbertonschool-conclave.git
 cd Holbertonschool-conclave
-git switch dev
+git checkout v1.0
 ```
 
 ### 1. Configuration locale
@@ -81,11 +83,64 @@ curl -s http://localhost:8000/api/health
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
 Puis ouvrez **http://localhost:5173**.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    U[Utilisateur] --> F[React + TypeScript]
+    F -->|POST document| API[FastAPI]
+    F <-->|snapshot + historique + SSE rejouable| API
+    API --> DB[(SQLite WAL)]
+    API --> O[Orchestrateur asyncio]
+    O --> A[Avocat]
+    O --> P[Procureur]
+    O --> C[Comptable]
+    A --> L[Boucle agent bornée]
+    P --> L
+    C --> L
+    L --> T[Outils locaux déterministes]
+    L <-->|stream MiniMax-M3| M[API MiniMax]
+    A --> V[Validation AgentOutput]
+    P --> V
+    C --> V
+    V --> R[Arbitre]
+    R --> AV[Validation ArbiterVerdict]
+    AV --> DB
+    L -->|événements et traces| DB
+```
+
+Le navigateur ne dialogue jamais directement avec MiniMax. FastAPI valide le
+document, fige la configuration d'outils, démarre les trois experts en
+parallèle et persiste chaque transition avant sa diffusion SSE. Les outils
+lisent le document conservé côté serveur et ne prennent aucun argument. Les
+sorties des experts sont validées avant d'atteindre l'Arbitre ; le verdict est
+à son tour validé avant affichage. SQLite est donc à la fois le snapshot
+durable et la source du rejeu après un rechargement de page.
+
+Le diagramme éditable complet se trouve dans [`architecture.mmd`](architecture.mmd).
+Les prompts, signatures et boucles sont reproduits dans
+[`AGENTS.md`](AGENTS.md), sans exiger la lecture du code.
+
+## Choix techniques et alternatives écartées
+
+| Choix retenu | Alternative écartée | Pourquoi |
+| --- | --- | --- |
+| SSE persisté et rejouable | WebSocket ou animation « machine à écrire » | Le flux est uniquement serveur → navigateur. SSE gère nativement la reconnexion ; persister les deltas prouve qu'ils viennent du fournisseur et permet F5 sans faux streaming. |
+| SQLite en mode WAL | État en RAM, Redis ou PostgreSQL | L'état en RAM perdait les analyses au redémarrage. Redis/PostgreSQL auraient ajouté une infrastructure disproportionnée pour une démonstration mono-instance ; SQLite apporte transactions et durabilité locale. |
+| Outils locaux sans argument | Envoyer le document dans les arguments d'outil | Le modèle choisit l'outil, mais ne peut ni changer le document analysé ni injecter un chemin, une commande ou un secret. |
+| Pydantic + normalisation JSON isolée | Faire confiance au texte du modèle ou au seul `response_format` | MiniMax peut fermer le flux sans JSON valide. Une réparation bornée, sans outil et à température zéro, empêche une sortie invalide d'alimenter l'Arbitre. |
+| SDK OpenAI-compatible direct | Framework agentique généraliste | Trois outils et quatre rôles ne justifient pas une couche d'abstraction supplémentaire ; la boucle, les limites et les événements restent auditables. |
+| Validateurs TypeScript à l'exécution | Casts TypeScript sur les réponses HTTP/SSE | Les types disparaissent au runtime. Une réponse malformée est rejetée explicitement au lieu de corrompre silencieusement l'interface. |
+
+Ces choix optimisent une livraison démontrable et inspectable, pas une montée en
+charge mondiale. Les compromis qui en découlent sont listés explicitement plus
+bas.
 
 ## Utiliser le Contrat Conclave
 
@@ -185,12 +240,12 @@ section « Commande avancée » repliable garde l'accès à la grammaire brute
 Les garde-fous du Palier 4 s'appliquent : aucune valeur inventée, un seul
 outil par tour, sorties validées avant affichage, événements SSE bornés. Une
 chute du flux SSE déclenche une reconnexion bornée puis une erreur actionnable ;
-un événement malformé est ignoré et signalé sans vider le snapshot. Un document
-conforme à `Happy_path.md` doit parcourir les six étapes et finir sur
-`go_with_conditions` (à condition que les tarifs MiniMax soient configurés pour
-l'estimation du Comptable).
+un événement malformé est ignoré et signalé sans vider le snapshot. Le document
+de référence [`Happy_path.md`](Happy_path.md) doit parcourir les six étapes et
+atteindre un état terminal avec un verdict validé ; la décision précise reste
+une sortie du modèle et n'est volontairement pas codée en dur.
 
-## Passer de la démo au produit (Palier 5)
+## Fiabilité, sécurité et explicabilité
 
 ### Répondre à « pourquoi l'agent a fait ça ? » sans ouvrir le code
 
@@ -267,7 +322,8 @@ npm run build
 Depuis la racine :
 
 ```bash
-python -m pytest backend/tests -q   # 157 tests + 1 smoke MiniMax réel (skip sans clé)
+.venv/bin/python -m pytest backend/tests -q   # 166 tests + 1 smoke réel opt-in
+.venv/bin/python eval/run_eval.py             # score attendu : 5/5
 git status --short
 git diff --check
 ```
@@ -276,7 +332,51 @@ Le workflow CI (`.github/workflows/ci.yml`) exécute ces mêmes commandes sur
 chaque PR et push vers `main`/`dev`, sans clé MiniMax (le smoke test réel
 `backend/tests/test_minimax_smoke.py` s'auto-`skip` sans `MINIMAX_API_KEY`).
 
-### Démonstration en six étapes
+État validé pour `v1.0` : **166 tests backend réussis, 1 smoke réel ignoré
+sans clé, 101 tests frontend réussis, évaluation 5/5, lint et build réussis**.
+
+## Limites connues et assumées
+
+- **Une seule instance applicative.** SQLite WAL convient à la démo et à une
+  petite charge, mais pas à plusieurs processus répartis. Avec cent
+  utilisateurs, la limite `MAX_CONCURRENT_ANALYSES=3`, le débit MiniMax puis
+  le polling SSE/SQLite seraient les premiers goulots. Une file durable et
+  PostgreSQL/Redis seraient nécessaires avant une ouverture publique.
+- **Tâches de fond dans le processus FastAPI.** Un redémarrage marque les runs
+  actifs `interrupted` et préserve leurs événements, mais ne reprend pas leur
+  calcul. Il faudrait un worker durable avec reprise idempotente.
+- **Pas d'authentification ni de cloisonnement utilisateur.** L'UUID limite
+  l'énumération accidentelle, mais toute personne qui possède l'URL peut lire
+  l'analyse. Les commandes d'outils modifient un registre global. Une mise en
+  production exige identité, autorisation, quotas et rate limiting distribué.
+- **Données en clair.** Le document est persisté dans SQLite et transmis à
+  MiniMax. Il n'y a ni chiffrement applicatif, ni politique de rétention, ni
+  anonymisation automatique : ne pas soumettre de données sensibles sans
+  encadrement contractuel et technique supplémentaire.
+- **Dépendance au comportement MiniMax.** Le fournisseur peut omettre ou mal
+  fermer le JSON final même avec `finish_reason=stop`. Deux normalisations
+  structurées récupèrent les cas observés ; leur épuisement produit un expert
+  indisponible ou un échec explicite, jamais une sortie inventée.
+- **Détection d'injection heuristique.** Elle informe l'utilisateur mais peut
+  être contournée. La sécurité repose sur les capacités figées côté serveur,
+  les outils sans argument et les schémas de sortie, pas sur le détecteur.
+- **Estimation de coût, pas facturation.** Les tarifs sont configurables et le
+  budget annoncé est conservateur. `estimated_cost_usd` ne remplace pas la
+  facture du fournisseur ; sans tarifs, il reste volontairement `null`.
+- **Formats et tests UI limités.** La v1.0 accepte du texte brut de 1 à 12 000
+  caractères, pas les PDF/DOCX. Les composants et contrats sont testés, mais
+  il n'existe pas encore de suite Playwright multi-navigateurs.
+
+Ces limites sont acceptables pour le périmètre pédagogique et la démonstration
+locale ; elles sont bloquantes avant une exposition à de vrais utilisateurs.
+
+## Démonstration
+
+Le script soutenance à deux voix, chronométré sur cinq minutes, se trouve dans
+[`DEMO.md`](DEMO.md). Le parcours manuel détaillé ci-dessous sert de répétition
+technique et de diagnostic, pas de texte à réciter.
+
+### Parcours manuel en six étapes
 
 1. Ouvrir l'application : le stepper et les trois switches sont immédiatement
    visibles, avant tout document.
