@@ -3,7 +3,7 @@
 - `aiosqlite` (pinned 0.22.1) : connexion async, requêtes paramétrées.
 - `PRAGMA foreign_keys = ON`, `journal_mode = WAL`, `busy_timeout`.
 - Tables : schema_meta, analyses, expert_runs, tool_events, analysis_events,
-  tool_states, analysis_tool_states (v2).
+  tool_states, analysis_tool_states et analysis_security (v2).
 - L'initialisation est idempotente et se fait dans le lifespan FastAPI.
 - Une analyse `running` trouvée au démarrage devient `interrupted` sans perte
   des résultats déjà persistés ; une analyse `queued` reste `queued` (elle
@@ -21,7 +21,8 @@ Toute donnée JSON écrite ici provient de modèles Pydantic validés
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 from typing import Any, AsyncIterator
 
@@ -92,6 +93,12 @@ SCHEMA_SQL: tuple[str, ...] = (
         enabled INTEGER NOT NULL,
         PRIMARY KEY (analysis_id, tool_name)
     )""",
+    # Signaux d'injection repérés à la soumission, conservés avec l'analyse
+    # pour rester consultables après un rechargement (observabilité).
+    """CREATE TABLE IF NOT EXISTS analysis_security (
+        analysis_id TEXT PRIMARY KEY REFERENCES analyses(id) ON DELETE CASCADE,
+        signals_json TEXT NOT NULL
+    )""",
 )
 
 TERMINAL_ANALYSIS_STATUSES = ("completed", "degraded", "failed", "interrupted")
@@ -101,6 +108,14 @@ TERMINAL_EVENTS = (
     "analysis.failed",
     "analysis.interrupted",
 )
+
+
+class ActiveAnalysisLimitReached(RuntimeError):
+    """La limite a été vérifiée sous verrou d'écriture SQLite."""
+
+    def __init__(self, active: int) -> None:
+        super().__init__(f"active analysis limit reached: {active}")
+        self.active = active
 
 
 def utc_now_iso() -> str:
@@ -217,6 +232,152 @@ async def snapshot_analysis_tool_states(
     return await list_analysis_tool_states(conn, analysis_id)
 
 
+async def count_active_analyses(conn: aiosqlite.Connection) -> int:
+    """Analyses non terminées (queued ou running), pour borner la charge."""
+    cursor = await conn.execute(
+        "SELECT COUNT(*) AS n FROM analyses WHERE status IN ('queued', 'running')"
+    )
+    row = await cursor.fetchone()
+    return int(row["n"]) if row else 0
+
+
+async def create_queued_analysis(
+    conn: aiosqlite.Connection,
+    *,
+    analysis_id: str,
+    document: str,
+    now: str,
+    signals: list[str],
+    max_active: int,
+    queued_ttl_seconds: int,
+) -> list[aiosqlite.Row]:
+    """Crée tout l'état initial dans UNE transaction sérialisée.
+
+    Le verrou ``BEGIN IMMEDIATE`` rend atomiques le nettoyage des anciennes
+    files, le contrôle de concurrence, l'analyse, le snapshot des outils, le
+    rapport sécurité et ``analysis.created``. Aucun demi-objet ne peut rester
+    en base si une écriture échoue.
+    """
+    await conn.execute("BEGIN IMMEDIATE")
+    try:
+        cutoff = (
+            datetime.fromisoformat(now) - timedelta(seconds=queued_ttl_seconds)
+        ).isoformat()
+        stale = await (
+            await conn.execute(
+                "SELECT id FROM analyses "
+                "WHERE status = 'queued' AND created_at < ?",
+                (cutoff,),
+            )
+        ).fetchall()
+        for row in stale:
+            await conn.execute(
+                "UPDATE analyses SET status = 'failed', completed_at = ?, "
+                "error_code = 'start_timeout' WHERE id = ? AND status = 'queued'",
+                (now, row["id"]),
+            )
+            await conn.execute(
+                "INSERT INTO analysis_events "
+                "(analysis_id, event_type, payload_json, created_at) "
+                "VALUES (?, 'analysis.failed', ?, ?)",
+                (
+                    row["id"],
+                    json.dumps(
+                        {
+                            "analysis_id": row["id"],
+                            "status": "failed",
+                            "error_code": "start_timeout",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    now,
+                ),
+            )
+
+        active = await count_active_analyses(conn)
+        if active >= max_active:
+            # Les expirations éventuelles sont utiles même si cette nouvelle
+            # soumission est refusée. Le verrou reste tenu jusqu'ici.
+            await conn.commit()
+            raise ActiveAnalysisLimitReached(active)
+
+        await conn.execute(
+            "INSERT INTO analyses (id, document, status, created_at) "
+            "VALUES (?, ?, 'queued', ?)",
+            (analysis_id, document, now),
+        )
+        await conn.execute(
+            "INSERT INTO analysis_tool_states (analysis_id, tool_name, enabled) "
+            "SELECT ?, tool_name, enabled FROM tool_states",
+            (analysis_id,),
+        )
+        rows = await list_analysis_tool_states(conn, analysis_id)
+        enabled_tools = [row["tool_name"] for row in rows if row["enabled"]]
+        disabled_tools = [row["tool_name"] for row in rows if not row["enabled"]]
+        await conn.execute(
+            "INSERT INTO analysis_security (analysis_id, signals_json) VALUES (?, ?)",
+            (analysis_id, json.dumps(signals, ensure_ascii=False)),
+        )
+        await conn.execute(
+            "INSERT INTO analysis_events "
+            "(analysis_id, event_type, payload_json, created_at) "
+            "VALUES (?, 'analysis.created', ?, ?)",
+            (
+                analysis_id,
+                json.dumps(
+                    {
+                        "analysis_id": analysis_id,
+                        "created_at": now,
+                        "enabled_tools": enabled_tools,
+                        "disabled_tools": disabled_tools,
+                        "security_signals": signals,
+                    },
+                    ensure_ascii=False,
+                ),
+                now,
+            ),
+        )
+        await conn.commit()
+        return rows
+    except ActiveAnalysisLimitReached:
+        raise
+    except Exception:
+        await conn.rollback()
+        raise
+
+
+async def set_analysis_security(
+    conn: aiosqlite.Connection, analysis_id: str, signals: list[str]
+) -> None:
+    import json
+
+    await conn.execute(
+        "INSERT INTO analysis_security (analysis_id, signals_json) VALUES (?, ?) "
+        "ON CONFLICT(analysis_id) DO UPDATE SET signals_json = excluded.signals_json",
+        (analysis_id, json.dumps(signals, ensure_ascii=False)),
+    )
+    await conn.commit()
+
+
+async def get_analysis_security(
+    conn: aiosqlite.Connection, analysis_id: str
+) -> list[str]:
+    import json
+
+    cursor = await conn.execute(
+        "SELECT signals_json FROM analysis_security WHERE analysis_id = ?",
+        (analysis_id,),
+    )
+    row = await cursor.fetchone()
+    if row is None:
+        return []
+    try:
+        parsed = json.loads(row["signals_json"])
+    except (ValueError, TypeError):
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
 async def list_analysis_tool_states(
     conn: aiosqlite.Connection, analysis_id: str
 ) -> list[aiosqlite.Row]:
@@ -249,8 +410,23 @@ async def start_analysis(
         "WHERE id = ? AND status = 'queued'",
         (started_at, analysis_id),
     )
+    transitioned = cursor.rowcount == 1
+    if transitioned:
+        await conn.execute(
+            "INSERT INTO analysis_events "
+            "(analysis_id, event_type, payload_json, created_at) "
+            "VALUES (?, 'analysis.started', ?, ?)",
+            (
+                analysis_id,
+                json.dumps(
+                    {"analysis_id": analysis_id, "started_at": started_at},
+                    ensure_ascii=False,
+                ),
+                started_at,
+            ),
+        )
     await conn.commit()
-    return cursor.rowcount == 1
+    return transitioned
 
 
 async def get_analysis(conn: aiosqlite.Connection, analysis_id: str) -> aiosqlite.Row | None:
@@ -329,6 +505,47 @@ async def upsert_expert_run(
         ),
     )
     await conn.commit()
+
+
+async def timeout_running_expert_runs(
+    conn: aiosqlite.Connection,
+    analysis_id: str,
+    completed_at: str,
+    error_code: str,
+) -> list[str]:
+    """Ferme les runs encore actifs dans la transaction de fin globale."""
+    rows = await (
+        await conn.execute(
+            "SELECT role FROM expert_runs "
+            "WHERE analysis_id = ? AND status = 'running'",
+            (analysis_id,),
+        )
+    ).fetchall()
+    roles = [str(row["role"]) for row in rows]
+    await conn.execute(
+        "UPDATE expert_runs SET status = 'timeout', error_code = ?, completed_at = ? "
+        "WHERE analysis_id = ? AND status = 'running'",
+        (error_code, completed_at, analysis_id),
+    )
+    for role in roles:
+        await conn.execute(
+            "INSERT INTO analysis_events "
+            "(analysis_id, event_type, payload_json, created_at) "
+            "VALUES (?, 'expert.timeout', ?, ?)",
+            (
+                analysis_id,
+                json.dumps(
+                    {
+                        "analysis_id": analysis_id,
+                        "role": role,
+                        "error_code": error_code,
+                    },
+                    ensure_ascii=False,
+                ),
+                completed_at,
+            ),
+        )
+    return roles
 
 
 async def list_expert_runs(

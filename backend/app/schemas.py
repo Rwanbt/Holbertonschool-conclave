@@ -154,12 +154,33 @@ class ToolConfiguration(BaseModel):
     )
 
 
+class SecurityReport(BaseModel):
+    """Ce que le serveur a repéré dans le document soumis.
+
+    `prompt_injection_suspected` est un signal d'OBSERVABILITÉ, jamais une
+    autorisation : l'analyse se déroule normalement, les défenses réelles
+    étant structurelles (outils figés côté serveur, outils sans argument,
+    sortie validée par schéma). Voir SECURITY.md.
+    """
+
+    prompt_injection_suspected: bool = Field(
+        ..., description="Vrai si une tournure d'instruction a été repérée."
+    )
+    signals: list[str] = Field(
+        default_factory=list,
+        description="Noms des motifs repérés (heuristique, bornée à 10).",
+    )
+
+
 class AnalysisCreated(BaseModel):
     analysis_id: str = Field(..., description="Identifiant unique UUID de l'analyse.")
     status: AnalysisStatus = Field(..., description="Statut initial de l'analyse (queued).")
     created_at: str = Field(..., description="Date de création ISO-8601 UTC.")
     tool_configuration: ToolConfiguration = Field(
         ..., description="Configuration des outils figée pour cette analyse."
+    )
+    security: SecurityReport = Field(
+        ..., description="Signaux repérés dans le document soumis."
     )
 
 
@@ -247,6 +268,9 @@ class AnalysisSnapshot(BaseModel):
     )
     tool_configuration: ToolConfiguration = Field(
         ..., description="Configuration des outils figée pour cette analyse."
+    )
+    security: SecurityReport = Field(
+        ..., description="Signaux repérés dans le document soumis."
     )
 
 

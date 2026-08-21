@@ -28,7 +28,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from . import agent, db, experts, llm, toolkit
+from . import agent, db, experts, llm, security, toolkit
 from .config import Settings, get_settings
 from .schemas import (
     AgentRequest,
@@ -43,6 +43,7 @@ from .schemas import (
     ExpertRunView,
     LLMRequest,
     LLMResponse,
+    SecurityReport,
     StartAnalysisResponse,
     ToolCatalogResponse,
     ToolCommandRequest,
@@ -98,6 +99,89 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type"],
 )
+
+#: Le document est plafonné à 12 000 caractères (Pydantic). Mais Pydantic ne
+#: décide qu'APRÈS avoir lu et parsé tout le corps : un envoi de 40 Mo serait
+#: intégralement chargé en mémoire avant d'être refusé en 422. On coupe donc
+#: bien avant, y compris quand `Content-Length` est absent ou mensonger, avec
+#: une marge confortable pour l'échappement JSON et l'UTF-8 multi-octets.
+MAX_REQUEST_BYTES = 1_000_000
+
+
+class RequestBodyLimitMiddleware:
+    """ASGI pur : borne le flux reçu, même sans ``Content-Length``.
+
+    Les corps acceptés (au plus 1 Mo) sont rejoués à FastAPI. Dès que le flux
+    dépasse la limite, la lecture s'arrête et une 413 explicite est renvoyée.
+    """
+
+    def __init__(self, application: Any, max_bytes: int) -> None:
+        self.application = application
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: dict[str, Any], receive, send) -> None:
+        if scope["type"] != "http" or scope.get("method") not in {
+            "POST",
+            "PUT",
+            "PATCH",
+        }:
+            await self.application(scope, receive, send)
+            return
+
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                declared = int(raw_length.decode("ascii"))
+            except (UnicodeDecodeError, ValueError):
+                response = JSONResponse(
+                    status_code=400,
+                    content={"detail": "En-tête Content-Length invalide."},
+                )
+                await response(scope, receive, send)
+                return
+            if declared > self.max_bytes:
+                await self._reject(scope, receive, send, declared)
+                return
+
+        messages: list[dict[str, Any]] = []
+        received = 0
+        while True:
+            message = await receive()
+            messages.append(message)
+            if message["type"] == "http.disconnect":
+                break
+            if message["type"] != "http.request":
+                continue
+            received += len(message.get("body", b""))
+            if received > self.max_bytes:
+                await self._reject(scope, receive, send, received)
+                return
+            if not message.get("more_body", False):
+                break
+
+        async def replay_receive() -> dict[str, Any]:
+            if messages:
+                return messages.pop(0)
+            return {"type": "http.disconnect"}
+
+        await self.application(scope, replay_receive, send)
+
+    async def _reject(self, scope, receive, send, size: int) -> None:
+        response = JSONResponse(
+            status_code=413,
+            content={
+                "detail": (
+                    f"Corps de requête trop volumineux ({size} octets). "
+                    f"La limite est de {self.max_bytes} octets ; un document "
+                    "ne peut de toute façon pas dépasser 12 000 caractères."
+                )
+            },
+        )
+        await response(scope, receive, send)
+
+
+app.add_middleware(RequestBodyLimitMiddleware, max_bytes=MAX_REQUEST_BYTES)
 
 
 def _connection_factory(settings: Settings):
@@ -198,28 +282,43 @@ async def create_analysis(
     analysis_id = uuid.uuid4().hex
     now = db.utc_now_iso()
 
-    async with db.open_connection(settings.database_path) as conn:
-        await db.create_analysis(conn, analysis_id, request.document, now, status="queued")
-        rows = await db.snapshot_analysis_tool_states(conn, analysis_id)
-        tool_configuration = _tool_configuration_from_rows(rows)
-        await db.insert_analysis_event(
-            conn,
-            analysis_id,
-            "analysis.created",
-            {
-                "analysis_id": analysis_id,
-                "created_at": now,
-                "enabled_tools": tool_configuration.enabled_tools,
-                "disabled_tools": tool_configuration.disabled_tools,
+    # Détection purement informative : elle ne bloque JAMAIS l'analyse (voir
+    # SECURITY.md — les défenses réelles sont structurelles). Elle sert à dire
+    # à l'utilisateur ce que le serveur a vu dans son document.
+    signals = security.detect_injection_signals(request.document)
+
+    try:
+        async with db.open_connection(settings.database_path) as conn:
+            rows = await db.create_queued_analysis(
+                conn,
+                analysis_id=analysis_id,
+                document=request.document,
+                now=now,
+                signals=signals,
+                max_active=settings.max_concurrent_analyses,
+                queued_ttl_seconds=settings.queued_analysis_ttl_seconds,
+            )
+    except db.ActiveAnalysisLimitReached as exc:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": (
+                    f"{exc.active} analyses sont déjà en cours (limite : "
+                    f"{settings.max_concurrent_analyses}). Attendez qu'une "
+                    "analyse se termine avant d'en lancer une nouvelle."
+                )
             },
-            now,
         )
+    tool_configuration = _tool_configuration_from_rows(rows)
 
     return AnalysisCreated(
         analysis_id=analysis_id,
         status="queued",
         created_at=now,
         tool_configuration=tool_configuration,
+        security=SecurityReport(
+            prompt_injection_suspected=bool(signals), signals=signals
+        ),
     )
 
 
@@ -254,13 +353,6 @@ async def start_analysis(
                 status=current["status"] if current else "running",
                 already_started=True,
             )
-        await db.insert_analysis_event(
-            conn,
-            analysis_id,
-            "analysis.started",
-            {"analysis_id": analysis_id, "started_at": started_at},
-            started_at,
-        )
         document = row["document"]
 
     task = asyncio.create_task(
@@ -347,6 +439,7 @@ async def get_analysis_snapshot(
         )
 
     tool_rows = await db.list_analysis_tool_states(conn, analysis_id)
+    security_signals = await db.get_analysis_security(conn, analysis_id)
 
     return AnalysisSnapshot(
         analysis_id=row["id"],
@@ -380,6 +473,10 @@ async def get_analysis_snapshot(
             },
         },
         tool_configuration=_tool_configuration_from_rows(tool_rows),
+        security=SecurityReport(
+            prompt_injection_suspected=bool(security_signals),
+            signals=security_signals,
+        ),
     )
 
 

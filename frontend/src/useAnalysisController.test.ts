@@ -1,6 +1,11 @@
-import { renderHook, waitFor } from '@testing-library/react'
+import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { START_FALLBACK_MS, useAnalysisController } from './useAnalysisController'
+import {
+  START_FALLBACK_MS,
+  START_MAX_ATTEMPTS,
+  START_RETRY_DELAY_MS,
+  useAnalysisController,
+} from './useAnalysisController'
 import type { AnalysisSnapshot, EventsHistoryResponse } from './types'
 
 function baseSnapshot(overrides: Partial<AnalysisSnapshot> = {}): AnalysisSnapshot {
@@ -43,6 +48,7 @@ function baseSnapshot(overrides: Partial<AnalysisSnapshot> = {}): AnalysisSnapsh
       ],
       disabled_tools: [],
     },
+    security: { prompt_injection_suspected: false, signals: [] },
     ...overrides,
   }
 }
@@ -125,7 +131,7 @@ describe('useAnalysisController', () => {
     const source = FakeEventSource.instances[0]
     expect(source.url).toContain('after=0')
 
-    source.triggerOpen()
+    act(() => source.triggerOpen())
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([u, init]) => String(u).endsWith('/start') && (init as RequestInit)?.method === 'POST')).toBe(true),
     )
@@ -133,7 +139,7 @@ describe('useAnalysisController', () => {
     expect(startCallsAfterFirstOpen).toBe(1)
 
     // Une reconnexion native (nouvel onopen) ne doit PAS redéclencher /start.
-    source.triggerOpen()
+    act(() => source.triggerOpen())
     await new Promise((resolve) => setTimeout(resolve, 0))
     const startCallsAfterSecondOpen = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/start')).length
     expect(startCallsAfterSecondOpen).toBe(1)
@@ -186,7 +192,7 @@ describe('useAnalysisController', () => {
     })
 
     // Et si `onopen` finit par arriver, il ne redémarre pas une deuxième fois.
-    FakeEventSource.instances[0].triggerOpen()
+    act(() => FakeEventSource.instances[0].triggerOpen())
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(startCalls()).toBe(1)
   })
@@ -208,5 +214,63 @@ describe('useAnalysisController', () => {
 
     await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
     expect(FakeEventSource.instances[0].url).toContain('after=2')
+  })
+
+  it('ne rouvre pas SSE quand l’historique est terminal mais le snapshot est en retard', async () => {
+    const stale = baseSnapshot({ status: 'running', started_at: 't1' })
+    const completed = baseSnapshot({
+      status: 'completed',
+      started_at: 't1',
+      completed_at: 't2',
+    })
+    const history: EventsHistoryResponse = {
+      events: [
+        { id: 1, event_type: 'analysis.created', payload: { analysis_id: 'a1' }, created_at: 't0' },
+        { id: 2, event_type: 'analysis.completed', payload: { analysis_id: 'a1' }, created_at: 't2' },
+      ],
+      last_event_id: 2,
+      has_more: false,
+    }
+    let snapshotReads = 0
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/events/history')) return jsonResponse(history)
+      snapshotReads += 1
+      return jsonResponse(snapshotReads === 1 ? stale : completed)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useAnalysisController('a1'))
+
+    await waitFor(() => expect(result.current.connection.status).toBe('closed'))
+    await waitFor(() => expect(result.current.snapshot?.status).toBe('completed'))
+    expect(FakeEventSource.instances).toHaveLength(0)
+  })
+
+  it('rend l’échec de /start visible après un nombre borné de tentatives', async () => {
+    const snapshot = baseSnapshot({ status: 'queued' })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/events/history')) return jsonResponse(emptyHistory())
+      if (url.endsWith('/start') && init?.method === 'POST') {
+        throw new TypeError('network down')
+      }
+      return jsonResponse(snapshot)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useAnalysisController('a1'))
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+    act(() => FakeEventSource.instances[0].triggerOpen())
+
+    await waitFor(() => expect(result.current.connection.status).toBe('error'), {
+      timeout: START_RETRY_DELAY_MS * START_MAX_ATTEMPTS + 3000,
+    })
+    const startCalls = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/start'))
+    expect(startCalls).toHaveLength(START_MAX_ATTEMPTS)
+    expect(result.current.connection).toMatchObject({
+      status: 'error',
+      message: expect.stringContaining('Réessayez la connexion'),
+    })
   })
 })

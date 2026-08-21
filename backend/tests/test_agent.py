@@ -152,6 +152,41 @@ class TestRegistry:
 
 
 class TestAgentLoop:
+    def test_rejected_tool_call_is_sent_to_event_sink(self, monkeypatch) -> None:
+        events: list[tuple[str, dict]] = []
+
+        async def sink(kind: str, fields: dict) -> None:
+            events.append((kind, fields))
+
+        client = _FakeClient(
+            [
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(
+                        content=None,
+                        tool_calls=[_FakeToolCall("call_1", "measure_current_document", "not-json")],
+                    ))]
+                ),
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Refus."))]),
+            ]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda s: client)
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse le document."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=3,
+                tool_event_sink=sink,
+            )
+        )
+
+        assert result.trace[0].error_code == "invalid_arguments"
+        assert events[0][0] == "tool.failed"
+        assert events[0][1]["error_code"] == "invalid_arguments"
+
     def test_simple_request_without_tools(self, monkeypatch) -> None:
         response = _run(
             monkeypatch,
@@ -541,3 +576,68 @@ class TestAgentLoop:
                 ],
             )
         assert isinstance(exc_info.value, agent.ProviderError)
+
+    def test_provider_error_closes_the_visible_round(self, monkeypatch) -> None:
+        client = _FakeClient([_FakeCompletion([], usage=None)])
+        monkeypatch.setattr(agent, "build_client", lambda _settings: client)
+        events: list[tuple[str, dict]] = []
+
+        async def round_sink(kind: str, fields: dict) -> None:
+            events.append((kind, dict(fields)))
+
+        async def run() -> None:
+            await agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse le document."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=3,
+                round_event_sink=round_sink,
+            )
+
+        with pytest.raises(agent.ProviderError):
+            asyncio.run(run())
+        assert events[0][0] == "agent.round.started"
+        assert events[-1][0] == "agent.round.completed"
+        assert events[-1][1]["outcome"] == "provider_error"
+
+    def test_round_limit_has_the_correct_visible_outcome(self, monkeypatch) -> None:
+        client = _FakeClient(
+            [
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_1", "measure_current_document", "{}"
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                )
+            ]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda _settings: client)
+        events: list[tuple[str, dict]] = []
+
+        async def round_sink(kind: str, fields: dict) -> None:
+            events.append((kind, dict(fields)))
+
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse le document."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=1,
+                round_event_sink=round_sink,
+            )
+        )
+        assert result.stop_reason == "max_rounds_reached"
+        assert events[-1][1]["outcome"] == "max_rounds"

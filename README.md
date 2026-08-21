@@ -104,6 +104,8 @@ Le backend transmet à MiniMax les **deltas réels** de la réponse via des
   croissante par rôle, `delta` borné par `STREAM_DELTA_BATCH_CHARS`) ;
 - `agent.response.completed` — la réponse du rôle est terminée ;
 - `agent.response.failed` — la réponse s’est arrêtée (ex. erreur de protocole).
+- `analysis.started`, `agent.round.started` et `agent.round.completed` — le
+  démarrage et la progression bornée de chaque tour sont persistés.
 
 Le front reconstruit par rôle (`collectLiveResponses`) un **brouillon live** :
 les deltas sont concaténés dans l’ordre des séquences, une séquence dupliquée
@@ -144,12 +146,14 @@ pour reconstruire brouillons et traces sans rejouer `after=0` sur le flux SSE
 vivant. Le flux SSE **n'est jamais rouvert** pour une analyse déjà terminale
 (le front affiche l'état final directement, ce n'est pas une animation à
 rejouer) ; pour une analyse `queued`/`running`, il reprend depuis le plus grand
-identifiant hydraté, et `POST …/start` n'est rappelé qu'une fois après
-`onopen` (idempotent côté serveur, donc une reconnexion native ne le redéclenche
-jamais). L'idempotence par `event.id` absorbe les rejeux, et le même
-`EventSource` utilise sa reconnexion native avec `Last-Event-ID` en cas de
-coupure. Le POST de création n'est jamais relancé au rechargement ; une analyse
-introuvable (404) nettoie la référence locale.
+identifiant hydraté. `POST …/start` part après `onopen` (ou après un délai de
+secours) et dispose de trois tentatives bornées ; l'idempotence serveur évite
+tout double job si la réponse HTTP s'est perdue. L'idempotence par `event.id`
+absorbe les rejeux. `EventSource` tente sa reconnexion avec `Last-Event-ID`,
+mais le front coupe après dix secondes sans reprise et affiche un bouton
+« Réessayer la connexion » au lieu d'un spinner infini. Le POST de création
+n'est jamais relancé au rechargement ; une analyse introuvable (404) nettoie
+la référence locale.
 
 ### Panneau outils — switches indépendants dès la première page
 
@@ -174,11 +178,75 @@ section « Commande avancée » repliable garde l'accès à la grammaire brute
 
 Les garde-fous du Palier 4 s'appliquent : aucune valeur inventée, un seul
 outil par tour, sorties validées avant affichage, événements SSE bornés. Une
-chute du flux SSE déclenche la reconnexion native de l'EventSource ; un
-événement malformé est ignoré et signalé sans vider le snapshot. Un document
+chute du flux SSE déclenche une reconnexion bornée puis une erreur actionnable ;
+un événement malformé est ignoré et signalé sans vider le snapshot. Un document
 conforme à `Happy_path.md` doit parcourir les six étapes et finir sur
 `go_with_conditions` (à condition que les tarifs MiniMax soient configurés pour
 l'estimation du Comptable).
+
+## Passer de la démo au produit (Palier 5)
+
+### Répondre à « pourquoi l'agent a fait ça ? » sans ouvrir le code
+
+Le panneau **« Pourquoi ce résultat ? »** s'affiche sous le verdict et donne,
+dans l'ordre :
+
+1. **ce qui a échoué** — chaque code d'erreur traduit en français avec l'action
+   corrective (`provider_unavailable` → « MiniMax n'a pas répondu […] vérifiez
+   MINIMAX_API_KEY ») ;
+2. **le contrôle du document soumis** — tournures d'instruction repérées ;
+3. **les outils disponibles pour cette analyse** — activés, et désactivés dont
+   le schéma n'a pas été envoyé au modèle ;
+4. **la décision prise à chaque tour** — par rôle : `a demandé un outil`,
+   `a rendu sa réponse finale`, avec la latence ;
+5. **les outils réellement exécutés** et leur résultat.
+
+### Échouer bruyamment, jamais mentir
+
+Deux issues acceptables quand on casse l'application : ça marche, ou ça refuse
+proprement. Jamais « ça ment ».
+
+| Entrée hostile | Réponse |
+|---|---|
+| Champ vide | 422, aucune analyse créée |
+| Corps de 40 Mo | 413 sur `Content-Length`, ou dès que le flux sans longueur fiable dépasse 1 Mo |
+| Émojis, cyrillique, SQL | acceptés, stockés à l'identique, requêtes paramétrées |
+| Injection de prompt | analysée, **signalée**, sans extension de capacités (voir `SECURITY.md`) |
+| Dix clics sur « Convoquer » | 429 au-delà de `MAX_CONCURRENT_ANALYSES`, avec la marche à suivre |
+| Réseau coupé / fausse clé | `provider_unavailable` affiché, experts sortis de `running`, **aucun spinner infini** |
+
+### Évaluation chiffrée
+
+Cinq cas décrits à la main dans [`eval/cases.md`](eval/cases.md), rejouables en
+une commande, **sans clé MiniMax** (le fournisseur est simulé) :
+
+```bash
+make eval          # ou, depuis frontend/ : npm run eval
+```
+
+Score courant : **5/5 invariants techniques avec fournisseur simulé** (2/5
+avant le palier 5 — le détail et les limites de ce score sont dans
+`eval/cases.md`). La CI exécute l'éval à chaque PR, donc une régression casse
+le build.
+
+### Sécurité
+
+[`SECURITY.md`](SECURITY.md) répond en détail à « que se passe-t-il si
+l'utilisateur écrit *ignore tes instructions précédentes* ? », et explique
+pourquoi la détection heuristique n'est **pas** la défense — les vraies
+barrières sont structurelles.
+
+```bash
+cd frontend && npm run build && cd ..
+./scripts/check-no-secrets.sh     # aucune clé dans le bundle publié
+```
+
+### Thème clair / sombre
+
+Un bouton dans l'en-tête bascule le thème. Par défaut l'application suit
+`prefers-color-scheme` ; un choix explicite est mémorisé et l'emporte ensuite
+sur le réglage système. Toutes les couleurs passent par des jetons CSS
+(`src/index.css`), aucune valeur n'est codée en dur dans les composants.
 
 ## Procédure de test
 
@@ -193,7 +261,7 @@ npm run build
 Depuis la racine :
 
 ```bash
-python -m pytest backend/tests -q   # 132 tests + 1 smoke MiniMax réel (skip sans clé)
+python -m pytest backend/tests -q   # 157 tests + 1 smoke MiniMax réel (skip sans clé)
 git status --short
 git diff --check
 ```

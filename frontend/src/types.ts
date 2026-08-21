@@ -106,11 +106,17 @@ export interface ToolConfiguration {
   disabled_tools: ToolName[]
 }
 
+export interface SecurityReport {
+  prompt_injection_suspected: boolean
+  signals: string[]
+}
+
 export interface AnalysisCreated {
   analysis_id: string
   status: AnalysisStatus
   created_at: string
   tool_configuration: ToolConfiguration
+  security: SecurityReport
 }
 
 export interface StartAnalysisResponse {
@@ -147,6 +153,7 @@ export interface AnalysisSnapshot {
   usage: ExecutionUsage
   guardrails: GuardrailInfo
   tool_configuration: ToolConfiguration
+  security: SecurityReport
 }
 
 export type AnalysisEventType =

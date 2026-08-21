@@ -25,7 +25,7 @@ from . import toolkit
 from .config import Settings, get_settings
 from .llm import ProviderError, build_client
 from .schemas import AgentResponse, ExecutionUsage, ToolTraceEntry
-from .streaming import stream_chat_completion
+from .streaming import LiveSinkError, stream_chat_completion
 
 SYSTEM_PROMPT: str = (
     "Tu es un agent d'analyse documentaire du backend CONCLAVE. "
@@ -162,6 +162,28 @@ async def run_agent_loop(
     stop = False
     stop_reason: str | None = None
 
+    def record_usage(completion: Any) -> None:
+        nonlocal any_usage, total_input, total_output, total_tokens
+        if completion.usage is None:
+            return
+        any_usage = True
+        total_input += completion.usage.prompt_tokens or 0
+        total_output += completion.usage.completion_tokens or 0
+        total_tokens += completion.usage.total_tokens or 0
+
+    async def emit_round_completed(
+        round_number: int, outcome: str, latency_ms: int
+    ) -> None:
+        if round_event_sink is not None:
+            await round_event_sink(
+                "agent.round.completed",
+                {
+                    "round": round_number,
+                    "outcome": outcome,
+                    "latency_ms": latency_ms,
+                },
+            )
+
     async with build_client(settings) as client:
         # Boucle visible et montrable : chaque round est un appel MiniMax.
         for round_number in range(1, max_rounds + 1):
@@ -202,11 +224,20 @@ async def run_agent_loop(
 
             try:
                 completion = await _call(messages)
+            except LiveSinkError:
+                # Une panne SQLite/UI dans le sink n'est pas une panne MiniMax.
+                # L'appelant la trace comme erreur interne.
+                raise
             except Exception as exc:  # noqa: BLE001 - toute cause mène au 502
+                round_latency_ms = int((time.monotonic() - started) * 1000)
+                total_latency_ms += round_latency_ms
+                await emit_round_completed(
+                    round_number, "provider_error", round_latency_ms
+                )
                 raise ProviderError(
                     f"MiniMax agent request failed: {exc.__class__.__name__}"
                 ) from exc
-            round_outcome = "final_response"
+            record_usage(completion)
 
             if (
                 stream_final_envelope
@@ -216,20 +247,26 @@ async def run_agent_loop(
                     completion = await _call(
                         messages + [{"role": "user", "content": _PROTOCOL_REPAIR_HINT}]
                     )
+                except LiveSinkError:
+                    raise
                 except Exception as exc:  # noqa: BLE001
+                    round_latency_ms = int((time.monotonic() - started) * 1000)
+                    total_latency_ms += round_latency_ms
+                    await emit_round_completed(
+                        round_number, "provider_error", round_latency_ms
+                    )
                     raise ProviderError(
                         f"MiniMax agent repair request failed: {exc.__class__.__name__}"
                     ) from exc
+                record_usage(completion)
 
-            total_latency_ms += int((time.monotonic() - started) * 1000)
-
-            if completion.usage is not None:
-                any_usage = True
-                total_input += completion.usage.prompt_tokens or 0
-                total_output += completion.usage.completion_tokens or 0
-                total_tokens += completion.usage.total_tokens or 0
+            round_latency_ms = int((time.monotonic() - started) * 1000)
+            total_latency_ms += round_latency_ms
 
             if not completion.choices:
+                await emit_round_completed(
+                    round_number, "provider_error", round_latency_ms
+                )
                 raise ProviderError("MiniMax agent returned no choices")
 
             message = completion.choices[0].message
@@ -240,16 +277,9 @@ async def run_agent_loop(
                     live_text = completion.live_text or live_text
                     stop = True
                     stop_reason = "protocol_error"
-                    round_outcome = "protocol_error"
-                    if round_event_sink is not None:
-                        await round_event_sink(
-                            "agent.round.completed",
-                            {
-                                "round": round_number,
-                                "outcome": round_outcome,
-                                "latency_ms": total_latency_ms,
-                            },
-                        )
+                    await emit_round_completed(
+                        round_number, "protocol_error", round_latency_ms
+                    )
                     break
                 final_json = (completion.final_json or "").strip()
                 if completion.live_text:
@@ -257,26 +287,50 @@ async def run_agent_loop(
             else:
                 final_json = ""
 
-            if tool_calls:
-                round_outcome = "tool_calls"
-
-            if round_event_sink is not None:
-                await round_event_sink(
-                    "agent.round.completed",
-                    {
-                        "round": round_number,
-                        "outcome": round_outcome,
-                        "latency_ms": total_latency_ms,
-                    },
-                )
-
             if not tool_calls:
                 content = (message.content or "").strip()
                 if not content and not final_json:
+                    await emit_round_completed(
+                        round_number, "provider_error", round_latency_ms
+                    )
                     raise ProviderError("MiniMax agent returned an empty answer")
                 answer = final_json or content
+                await emit_round_completed(
+                    round_number, "final_response", round_latency_ms
+                )
                 break
 
+            if round_number >= max_rounds:
+                await emit_round_completed(
+                    round_number, "max_rounds", round_latency_ms
+                )
+                for call in tool_calls:
+                    _append_trace_error(
+                        trace,
+                        call.function.name,
+                        "max_rounds_reached",
+                        {"tool": call.function.name},
+                    )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": call.function.name,
+                                "status": "error",
+                                "input_summary": {"tool": call.function.name},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "max_rounds_reached",
+                            },
+                        )
+                stop = True
+                stop_reason = "max_rounds_reached"
+                break
+
+            await emit_round_completed(round_number, "tool_calls", round_latency_ms)
             messages.append(
                 {
                     "role": "assistant",
@@ -295,18 +349,6 @@ async def run_agent_loop(
                 }
             )
 
-            if round_number >= max_rounds:
-                for call in tool_calls:
-                    _append_trace_error(
-                        trace,
-                        call.function.name,
-                        "max_rounds_reached",
-                        {"tool": call.function.name},
-                    )
-                stop = True
-                stop_reason = "max_rounds_reached"
-                break
-
             deferred = tool_calls[1:] if one_tool_per_round else []
             for index, call in enumerate(tool_calls):
                 if deferred and index > 0:
@@ -316,6 +358,21 @@ async def run_agent_loop(
                         "one_tool_per_round",
                         {"tool": call.function.name},
                     )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": call.function.name,
+                                "status": "error",
+                                "input_summary": {"tool": call.function.name},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "one_tool_per_round",
+                            },
+                        )
                     messages.append(
                         {
                             "role": "tool",
@@ -350,6 +407,21 @@ async def run_agent_loop(
                         "invalid_arguments",
                         {"requested_tool": name, "arguments_preview": arguments_raw[:200]},
                     )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": name,
+                                "status": "error",
+                                "input_summary": {"requested_tool": name},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "invalid_arguments",
+                            },
+                        )
                     messages.append(
                         {
                             "role": "tool",
@@ -376,6 +448,21 @@ async def run_agent_loop(
                         "repeated_tool_call",
                         {"tool": name, "identical_call": True},
                     )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": name,
+                                "status": "error",
+                                "input_summary": {"tool": name, "identical_call": True},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "repeated_tool_call",
+                            },
+                        )
                     messages.append(
                         {
                             "role": "tool",

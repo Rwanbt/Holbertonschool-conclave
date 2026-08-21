@@ -19,6 +19,7 @@ import type {
   StartAnalysisResponse,
   ToolCatalogResponse,
   ToolCommandResponse,
+  SecurityReport,
   ToolConfiguration,
   ToolName,
   ToolState,
@@ -365,6 +366,13 @@ function readNullableVerdict(value: unknown): ArbiterVerdict | null {
   return parseArbiterVerdict(value)
 }
 
+export function parseSecurityReport(value: unknown): SecurityReport {
+  const record = requireRecord(value)
+  const prompt_injection_suspected = readBoolean(record, 'prompt_injection_suspected')
+  const signals = readStringList(record.signals, 'signals', 10)
+  return { prompt_injection_suspected, signals }
+}
+
 export function parseToolConfiguration(value: unknown): ToolConfiguration {
   const record = requireRecord(value)
   const enabled_tools = readToolNameList(record.enabled_tools, 'enabled_tools')
@@ -396,7 +404,8 @@ export function parseAnalysisCreated(body: unknown): AnalysisCreated {
   )
   const created_at = readString(record, 'created_at')
   const tool_configuration = parseToolConfiguration(record.tool_configuration)
-  return { analysis_id, status, created_at, tool_configuration }
+  const security = parseSecurityReport(record.security)
+  return { analysis_id, status, created_at, tool_configuration, security }
 }
 
 export function parseStartAnalysisResponse(body: unknown): StartAnalysisResponse {
@@ -452,6 +461,7 @@ export function parseAnalysisSnapshot(body: unknown): AnalysisSnapshot {
   const usage = readUsage(record.usage)
   const guardrails = parseGuardrails(record.guardrails)
   const tool_configuration = parseToolConfiguration(record.tool_configuration)
+  const security = parseSecurityReport(record.security)
   return {
     analysis_id,
     document,
@@ -467,6 +477,7 @@ export function parseAnalysisSnapshot(body: unknown): AnalysisSnapshot {
     usage,
     guardrails,
     tool_configuration,
+    security,
   }
 }
 

@@ -128,6 +128,41 @@ class TestFullHappyPath:
 
 
 class TestArbiterAndDegradation:
+    def test_escaped_expert_exception_is_persisted_and_degrades(self, tmp_path, patch_minimax, monkeypatch) -> None:
+        scripts = scripted_experts()
+        scripts.update(scripted_arbiter())
+        client = FakeClient(scripts)
+        patch_minimax(client)
+        original_run_expert = experts.run_expert
+
+        async def escaped(role, **kwargs):
+            if role == "procureur":
+                raise RuntimeError("unexpected expert failure")
+            return await original_run_expert(role, **kwargs)
+
+        monkeypatch.setattr(experts, "run_expert", escaped)
+        result = _run_analysis(tmp_path, _settings(tmp_path), client)
+
+        assert result.status == "degraded"
+        assert result.verdict is not None
+
+        async def read():
+            async with db.open_connection(_settings(tmp_path).database_path) as conn:
+                return (
+                    await db.list_expert_runs(conn, "a1"),
+                    await db.list_events_after(conn, "a1"),
+                )
+
+        runs, events = asyncio.run(read())
+        escaped_runs = [run for run in runs if run["role"] == "procureur"]
+        assert escaped_runs[0]["status"] == "error"
+        assert escaped_runs[0]["error_code"] == "internal_error"
+        assert any(
+            event["event_type"] == "expert.failed"
+            and '"error_code": "internal_error"' in event["payload_json"]
+            for event in events
+        )
+
     def test_degraded_when_one_expert_missing(self, tmp_path, patch_minimax) -> None:
         scripts = scripted_experts(
             comptable_extra=[final_completion(agent_output_json("comptable", score=70))]
@@ -135,7 +170,9 @@ class TestArbiterAndDegradation:
         # Le procureur répond un texte sans JSON : il échoue structurellement.
         scripts["procureur"] = [final_completion("texte sans objet JSON")]
         scripts.update(scripted_arbiter())
-        client = FakeClient(scripts)
+        client = FakeClient(
+            scripts, repairs=[final_completion("toujours pas")]
+        )
         patch_minimax(client)
 
         result = _run_analysis(tmp_path, _settings(tmp_path), client)
@@ -152,13 +189,23 @@ class TestArbiterAndDegradation:
         )
         scripts["avocat"] = [final_completion("sans json")]
         scripts["procureur"] = [final_completion("sans json encore")]
-        client = FakeClient(scripts)
+        client = FakeClient(
+            scripts,
+            repairs=[
+                final_completion("toujours invalide"),
+                final_completion("encore invalide"),
+            ],
+        )
         patch_minimax(client)
 
         result = _run_analysis(tmp_path, _settings(tmp_path), client)
 
         assert result.status == "failed"
-        assert result.error_code == "insufficient_expertise"
+        # P5 : on remonte la CAUSE, pas la conséquence. Les experts ont bien
+        # répondu — c'est leur sortie qui était inexploitable. Annoncer
+        # « insufficient_expertise » masquerait la vraie raison, alors que le
+        # checkpoint exige de pouvoir répondre à « pourquoi ? » depuis l'app.
+        assert result.error_code == "structured_output_error"
         assert result.verdict is None
 
     def test_arbiter_failure_keeps_expert_outputs_visible(self, tmp_path, patch_minimax) -> None:
@@ -166,15 +213,36 @@ class TestArbiterAndDegradation:
             comptable_extra=[final_completion(agent_output_json("comptable", score=70))]
         )
         scripts["arbitre"] = [final_completion("pas un verdict json")]
+        client = FakeClient(
+            scripts, repairs=[final_completion("toujours pas un verdict json")]
+        )
+        patch_minimax(client)
+
+        result = _run_analysis(tmp_path, _settings(tmp_path), client)
+
+        assert result.status == "failed"
+        # La cause précise de l'échec arbitre remonte jusqu'à l'analyse.
+        assert result.error_code == "structured_output_error"
+        assert result.verdict is None
+        assert sum(1 for e in result.experts if e.output is not None) == 3
+
+    def test_arbiter_repair_provider_failure_reaches_global_status(
+        self, tmp_path, patch_minimax
+    ) -> None:
+        scripts = scripted_experts(
+            comptable_extra=[final_completion(agent_output_json("comptable", score=70))]
+        )
+        scripts["arbitre"] = [final_completion("pas un verdict json")]
+        # Aucun script de réparation : le double simule ici une requête de
+        # réparation fournisseur qui échoue.
         client = FakeClient(scripts)
         patch_minimax(client)
 
         result = _run_analysis(tmp_path, _settings(tmp_path), client)
 
         assert result.status == "failed"
-        assert result.error_code == "arbiter_error"
-        assert result.verdict is None
-        assert sum(1 for e in result.experts if e.output is not None) == 3
+        assert result.error_code == "provider_unavailable"
+        assert sum(1 for expert in result.experts if expert.output is not None) == 3
 
 
 class TestStructuredValidation:
@@ -196,6 +264,25 @@ class TestStructuredValidation:
         assert result.status == "completed"
         avocat = [e for e in result.experts if e.role == "avocat"][0]
         assert avocat.output is not None
+        assert avocat.usage.input_tokens == 60
+        assert avocat.usage.output_tokens == 80
+
+    def test_expert_repair_provider_failure_is_named(
+        self, tmp_path, patch_minimax
+    ) -> None:
+        scripts = scripted_experts(
+            comptable_extra=[final_completion(agent_output_json("comptable", score=70))]
+        )
+        scripts["avocat"] = [final_completion("sortie invalide")]
+        scripts.update(scripted_arbiter())
+        client = FakeClient(scripts)
+        patch_minimax(client)
+
+        result = _run_analysis(tmp_path, _settings(tmp_path), client)
+
+        avocat = [expert for expert in result.experts if expert.role == "avocat"][0]
+        assert avocat.error_code == "provider_unavailable"
+        assert result.status == "degraded"
 
     def test_unrepairable_output_fails_expert(self, tmp_path, patch_minimax) -> None:
         scripts = scripted_experts(
@@ -203,7 +290,9 @@ class TestStructuredValidation:
         )
         scripts["avocat"] = [final_completion("encore un texte"), final_completion("toujours pas")]
         scripts.update(scripted_arbiter())
-        client = FakeClient(scripts)
+        client = FakeClient(
+            scripts, repairs=[final_completion("toujours pas")]
+        )
         patch_minimax(client)
 
         result = _run_analysis(tmp_path, _settings(tmp_path), client)
@@ -219,7 +308,10 @@ class TestStructuredValidation:
         )
         scripts["comptable"] = [final_completion(agent_output_json("comptable", score=70))]
         scripts.update(scripted_arbiter())
-        client = FakeClient(scripts)
+        client = FakeClient(
+            scripts,
+            repairs=[final_completion(agent_output_json("comptable", score=70))],
+        )
         patch_minimax(client)
 
         result = _run_analysis(tmp_path, _settings(tmp_path), client)

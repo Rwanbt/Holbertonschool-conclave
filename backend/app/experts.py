@@ -11,7 +11,8 @@ Flot :
        document et les sorties validées, produit un ``ArbiterVerdict`` validé,
        et l'analyse se termine en ``completed`` (ou ``degraded`` si un expert
        manque). En cas de panne de l'Arbitre, les sorties des experts restent
-       visibles et l'analyse passe en ``failed`` (error_code=arbiter_error).
+       visibles et l'analyse passe en ``failed`` avec la cause précise de
+       l'Arbitre (``provider_unavailable``, ``arbiter_timeout``, etc.).
     4. Avec 0 ou 1 sortie valide, l'analyse échoue (``failed``) sans verdict.
     5. Le tout est borné par ``analysis_timeout_seconds``.
 
@@ -23,16 +24,18 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from pydantic import ValidationError
 
-from . import db
+from . import db, security, toolkit
 from .agent import AgentLoopResult, AgentSession, run_agent_loop
 from .config import Settings
-from .llm import build_client
+from .llm import ProviderError, build_client
 from .schemas import (
     AgentOutput,
     AgentResponseCompleted,
@@ -44,6 +47,8 @@ from .schemas import (
     ExpertRole,
     ToolTraceEntry,
 )
+
+logger = logging.getLogger(__name__)
 
 EXPERT_ROLES: tuple[ExpertRole, ...] = ("avocat", "procureur", "comptable")
 
@@ -67,6 +72,8 @@ SYSTEM_PROMPTS: dict[ExpertRole, str] = {
     "avocat": (
         "Tu es l'expert AVOCAT de l'analyse documentaire CONCLAVE. "
         "Le document te parvient dans le message utilisateur. "
+        + security.DOCUMENT_IS_DATA_RULE
+        + " "
         "Tu peux utiliser les outils serveur sans argument (métriques, indices "
         "de sécurité, coût) pour étayer ton argumentaire. "
         "Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les "
@@ -78,6 +85,8 @@ SYSTEM_PROMPTS: dict[ExpertRole, str] = {
     "procureur": (
         "Tu es l'expert PROCUREUR de l'analyse documentaire CONCLAVE. "
         "Le document te parvient dans le message utilisateur. "
+        + security.DOCUMENT_IS_DATA_RULE
+        + " "
         "Tu peux utiliser les outils serveur sans argument (métriques, indices "
         "de sécurité, coût) pour étayer ton réquisitoire. "
         "Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les "
@@ -89,6 +98,8 @@ SYSTEM_PROMPTS: dict[ExpertRole, str] = {
     "comptable": (
         "Tu es l'expert COMPTABLE de l'analyse documentaire CONCLAVE. "
         "Le document te parvient dans le message utilisateur. "
+        + security.DOCUMENT_IS_DATA_RULE
+        + " "
         "Tu dois d'abord observer les métriques du document, puis estimer le coût "
         "d'une analyse, puis seulement conclure. "
         "Un seul outil par tour : au premier tour, demande les métriques ; au tour "
@@ -119,6 +130,8 @@ ARBITER_SYSTEM_PROMPT: str = (
     "Tu peux aussi utiliser les outils serveur sans argument si tu dois vérifier "
     "un chiffre, mais ce n'est pas obligatoire. "
     "Départage les désaccords, puis rends une décision finale. "
+    + security.DOCUMENT_IS_DATA_RULE
+    + " "
     + _ARBITER_ENVELOPE
 )
 
@@ -205,6 +218,34 @@ class AnalysisResult:
     usage: ExecutionUsage
 
 
+# Ordre de priorité des causes d'échec : une panne d'infrastructure explique
+# tout le reste et doit être remontée AVANT une conclusion sur la qualité des
+# sorties. Sans cet ordre, une coupure réseau était annoncée à l'utilisateur
+# comme « pas assez d'experts exploitables » — un mensonge.
+_FAILURE_PRIORITY: tuple[str, ...] = (
+    "provider_unavailable",
+    "internal_error",
+    "expert_timeout",
+    "protocol_error",
+    "max_rounds_reached",
+    "repeated_tool_call",
+    "structured_output_error",
+)
+
+
+def _dominant_failure_code(codes: list[str | None]) -> str:
+    """Cause dominante d'un échec d'analyse, la plus explicative d'abord.
+
+    `insufficient_expertise` reste le repli quand les experts ont bel et bien
+    répondu mais que trop peu de sorties sont exploitables : c'est alors une
+    description exacte, pas un masque posé sur une panne."""
+    present = {code for code in codes if code}
+    for candidate in _FAILURE_PRIORITY:
+        if candidate in present:
+            return candidate
+    return "insufficient_expertise"
+
+
 def _empty_usage() -> ExecutionUsage:
     return ExecutionUsage(
         input_tokens=None,
@@ -249,7 +290,7 @@ async def _repair_structured_output(
     settings: Settings,
     error_hint: str,
     max_output_tokens: int | None = None,
-) -> str | None:
+) -> tuple[str | None, ExecutionUsage]:
     """Une seule tentative de réparation : nouvel appel MiniMax sans outils."""
     output_budget = max_output_tokens or settings.minimax_max_output_tokens
     messages = messages + [
@@ -262,6 +303,7 @@ async def _repair_structured_output(
             ),
         }
     ]
+    started = time.monotonic()
     try:
         completion = await client.chat.completions.create(
             model=settings.minimax_model,
@@ -269,14 +311,38 @@ async def _repair_structured_output(
             max_completion_tokens=output_budget,
             temperature=0.3,
             n=1,
-            tools=[],
         )
-    except Exception:  # noqa: BLE001
-        return None
+    except Exception as exc:  # noqa: BLE001 - cause fournisseur explicite
+        raise ProviderError(
+            f"MiniMax structured repair failed: {exc.__class__.__name__}"
+        ) from exc
+    latency_ms = int((time.monotonic() - started) * 1000)
+    raw_usage = completion.usage
+    input_tokens = (
+        (raw_usage.prompt_tokens or 0) if raw_usage is not None else None
+    )
+    output_tokens = (
+        (raw_usage.completion_tokens or 0) if raw_usage is not None else None
+    )
+    total_tokens = (
+        (raw_usage.total_tokens or 0) if raw_usage is not None else None
+    )
+    usage = ExecutionUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=total_tokens,
+        estimated_cost_usd=(
+            toolkit.estimated_cost_usd(settings, input_tokens or 0, output_tokens or 0)
+            if raw_usage is not None
+            else None
+        ),
+        total_latency_ms=latency_ms,
+        llm_rounds=1,
+    )
     if not completion.choices:
-        return None
+        raise ProviderError("MiniMax structured repair returned no choices")
     content = (completion.choices[0].message.content or "").strip()
-    return content or None
+    return content or None, usage
 
 
 async def run_expert(
@@ -288,6 +354,7 @@ async def run_expert(
     settings: Settings,
     get_connection: Callable[[], Awaitable[Any]],
     allowed_tools: frozenset[str] | None = None,
+    document_nonce: str = "",
 ) -> ExpertRunResult:
     """Exécute un expert : boucle d'outils puis sortie JSON validée (1 réparation).
 
@@ -363,6 +430,7 @@ async def run_expert(
                     "llm_round": fields["llm_round"],
                     "tool_name": fields["tool_name"],
                     "status": fields.get("status", "started"),
+                    "error_code": fields.get("error_code"),
                 },
                 now,
             )
@@ -393,7 +461,10 @@ async def run_expert(
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPTS[role]},
-        {"role": "user", "content": document},
+        {
+            "role": "user",
+            "content": security.wrap_document_as_data(document, document_nonce),
+        },
     ]
 
     async def run() -> AgentLoopResult:
@@ -413,14 +484,30 @@ async def run_expert(
             round_event_sink=round_sink,
         )
 
-    try:
-        loop_result = await asyncio.wait_for(
-            run(), timeout=settings.expert_timeout_seconds
-        )
-    except asyncio.TimeoutError:
-        await emit("expert.timeout", {"analysis_id": analysis_id, "role": role})
+    async def fail_run(
+        status: str,
+        error_code: str,
+        *,
+        timed_out: bool = False,
+        usage: ExecutionUsage | None = None,
+    ) -> ExpertRunResult:
+        """Termine BRUYAMMENT un expert : le run quitte l'état `running` en
+        base, l'échec est nommé par son vrai code, et les événements sont
+        émis. Sans cela, une exception qui s'échappe laissait le run à
+        `running` pour toujours (spinner infini côté interface) et l'analyse
+        requalifiait la panne en `insufficient_expertise` — l'application
+        annonçait « pas assez d'experts » alors que le fournisseur était
+        injoignable. Une application qui échoue bruyamment vaut infiniment
+        mieux qu'une application qui invente une explication."""
+        if timed_out:
+            await emit("expert.timeout", {"analysis_id": analysis_id, "role": role})
+        else:
+            await emit(
+                "expert.failed",
+                {"analysis_id": analysis_id, "role": role, "error_code": error_code},
+            )
         await response_sink(
-            "agent.response.failed", {"role": role, "error_code": "expert_timeout"}
+            "agent.response.failed", {"role": role, "error_code": error_code}
         )
         async with (await get_connection()) as conn:
             await db.upsert_expert_run(
@@ -428,8 +515,8 @@ async def run_expert(
                 run_id,
                 analysis_id,
                 role,
-                "timeout",
-                error_code="expert_timeout",
+                status,
+                error_code=error_code,
                 started_at=started_at,
                 completed_at=db.utc_now_iso(),
             )
@@ -437,12 +524,32 @@ async def run_expert(
             role=role,
             run_id=run_id,
             output=None,
-            error_code="expert_timeout",
-            usage=_empty_usage(),
+            error_code=error_code,
+            usage=usage or _empty_usage(),
             executed_tools=[],
             trace=[],
-            timed_out=True,
+            timed_out=timed_out,
         )
+
+    try:
+        loop_result = await asyncio.wait_for(
+            run(), timeout=settings.expert_timeout_seconds
+        )
+    except asyncio.TimeoutError:
+        return await fail_run("timeout", "expert_timeout", timed_out=True)
+    except ProviderError:
+        # Réseau coupé, clé invalide, 5xx MiniMax : la cause est CONNUE et
+        # doit être dite telle quelle, jamais traduite en autre chose.
+        return await fail_run("error", "provider_unavailable")
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - jamais avalé : tracé puis nommé
+        logger.exception(
+            "expert %s failed with an unexpected error (analysis %s)", role, analysis_id
+        )
+        return await fail_run("error", "internal_error")
+
+    run_usage = loop_result.usage
 
     output: AgentOutput | None = None
     error_code: str | None = None
@@ -483,14 +590,27 @@ async def run_expert(
             except ValidationError as exc:
                 hint = "erreurs de validation : " + str(exc.errors()[:3])
         if hint is not None:
-            async with build_client(settings) as client:
-                repaired = await _repair_structured_output(
-                    client,
-                    messages,
-                    settings,
-                    hint,
-                    max_output_tokens=settings.expert_max_output_tokens,
+            try:
+                async with build_client(settings) as client:
+                    repaired, repair_usage = await _repair_structured_output(
+                        client,
+                        messages,
+                        settings,
+                        hint,
+                        max_output_tokens=settings.expert_max_output_tokens,
+                    )
+            except ProviderError:
+                return await fail_run(
+                    "error", "provider_unavailable", usage=run_usage
                 )
+            except Exception:  # noqa: BLE001 - tracé et nommé
+                logger.exception(
+                    "expert %s repair failed internally (analysis %s)",
+                    role,
+                    analysis_id,
+                )
+                return await fail_run("error", "internal_error", usage=run_usage)
+            run_usage = _merge_usage([run_usage, repair_usage])
             if repaired:
                 repaired_data = extract_structured_json(repaired)
                 if repaired_data is not None:
@@ -552,7 +672,7 @@ async def run_expert(
         run_id=run_id,
         output=output,
         error_code=error_code,
-        usage=loop_result.usage,
+        usage=run_usage,
         executed_tools=loop_result.executed_tools,
         trace=loop_result.trace,
     )
@@ -568,7 +688,8 @@ async def run_arbiter(
     settings: Settings,
     get_connection: Callable[[], Awaitable[Any]],
     allowed_tools: frozenset[str] | None = None,
-) -> tuple[ArbiterVerdict | None, ExecutionUsage]:
+    document_nonce: str = "",
+) -> tuple[ArbiterVerdict | None, ExecutionUsage, str | None]:
     """Arbitre : reçoit document + sorties validées, rend un verdict JSON validé."""
     async def emit(event_type: str, payload: dict[str, Any]) -> None:
         async with (await get_connection()) as conn:
@@ -638,6 +759,7 @@ async def run_arbiter(
                     "llm_round": fields["llm_round"],
                     "tool_name": fields["tool_name"],
                     "status": fields.get("status", "started"),
+                    "error_code": fields.get("error_code"),
                 },
                 now,
             )
@@ -655,7 +777,10 @@ async def run_arbiter(
     ]
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": ARBITER_SYSTEM_PROMPT},
-        {"role": "user", "content": document},
+        {
+            "role": "user",
+            "content": security.wrap_document_as_data(document, document_nonce),
+        },
         {
             "role": "user",
             "content": (
@@ -686,19 +811,34 @@ async def run_arbiter(
             round_event_sink=round_sink,
         )
 
+    async def fail_arbiter(
+        error_code: str,
+        usage: ExecutionUsage | None = None,
+    ) -> tuple[None, ExecutionUsage, str]:
+        await emit(
+            "arbiter.failed",
+            {"analysis_id": analysis_id, "error_code": error_code},
+        )
+        await response_sink(
+            "agent.response.failed", {"role": "arbitre", "error_code": error_code}
+        )
+        return None, usage or _empty_usage(), error_code
+
     try:
         loop_result = await asyncio.wait_for(
             run(), timeout=settings.arbiter_timeout_seconds
         )
     except asyncio.TimeoutError:
-        await emit(
-            "arbiter.failed",
-            {"analysis_id": analysis_id, "error_code": "arbiter_timeout"},
-        )
-        await response_sink(
-            "agent.response.failed", {"role": "arbitre", "error_code": "arbiter_timeout"}
-        )
-        return None, _empty_usage()
+        return await fail_arbiter("arbiter_timeout")
+    except ProviderError:
+        return await fail_arbiter("provider_unavailable")
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - jamais avalé : tracé puis nommé
+        logger.exception("arbiter failed unexpectedly (analysis %s)", analysis_id)
+        return await fail_arbiter("internal_error")
+
+    arbiter_usage = loop_result.usage
 
     raw = (loop_result.answer or "").strip()
     verdict: ArbiterVerdict | None = None
@@ -716,14 +856,23 @@ async def run_arbiter(
             except ValidationError as exc:
                 hint = "erreurs de validation : " + str(exc.errors()[:3])
         if hint is not None:
-            async with build_client(settings) as client:
-                repaired = await _repair_structured_output(
-                    client,
-                    messages,
-                    settings,
-                    hint,
-                    max_output_tokens=settings.expert_max_output_tokens,
+            try:
+                async with build_client(settings) as client:
+                    repaired, repair_usage = await _repair_structured_output(
+                        client,
+                        messages,
+                        settings,
+                        hint,
+                        max_output_tokens=settings.expert_max_output_tokens,
+                    )
+            except ProviderError:
+                return await fail_arbiter("provider_unavailable", arbiter_usage)
+            except Exception:  # noqa: BLE001 - tracé et nommé
+                logger.exception(
+                    "arbiter repair failed internally (analysis %s)", analysis_id
                 )
+                return await fail_arbiter("internal_error", arbiter_usage)
+            arbiter_usage = _merge_usage([arbiter_usage, repair_usage])
             if repaired:
                 repaired_data = extract_structured_json(repaired)
                 if repaired_data is not None:
@@ -747,7 +896,11 @@ async def run_arbiter(
             "arbiter.failed",
             {"analysis_id": analysis_id, "error_code": "structured_output_error"},
         )
-    return verdict, loop_result.usage
+    return (
+        verdict,
+        arbiter_usage,
+        None if verdict is not None else "structured_output_error",
+    )
 
 
 async def run_analysis(
@@ -764,6 +917,9 @@ async def run_analysis(
     figée par `snapshot_analysis_tool_states` à la création de l'analyse.
     """
     session = AgentSession(document=document)
+    # Nonce régénéré à chaque analyse : le document ne peut pas deviner la
+    # borne fermante de sa propre zone de données pour reprendre la main.
+    document_nonce = security.new_document_nonce()
 
     async with (await get_connection()) as conn:
         tool_rows = await db.list_analysis_tool_states(conn, analysis_id)
@@ -788,6 +944,7 @@ async def run_analysis(
             settings=settings,
             get_connection=get_connection,
             allowed_tools=allowed_tools,
+            document_nonce=document_nonce,
         )
 
     tasks = [run_one(role) for role in EXPERT_ROLES]
@@ -797,20 +954,28 @@ async def run_analysis(
             timeout=settings.analysis_timeout_seconds,
         )
     except asyncio.TimeoutError:
+        completed_at = db.utc_now_iso()
         async with (await get_connection()) as conn:
-            await db.set_analysis_status(
+            await db.timeout_running_expert_runs(
                 conn,
                 analysis_id,
-                "failed",
-                completed_at=db.utc_now_iso(),
-                error_code="analysis_timeout",
+                completed_at,
+                "analysis_timeout",
             )
-            await db.insert_analysis_event(
+            await db.finish_analysis(
                 conn,
                 analysis_id,
-                "analysis.failed",
-                {"analysis_id": analysis_id, "error_code": "analysis_timeout"},
-                db.utc_now_iso(),
+                status="failed",
+                error_code="analysis_timeout",
+                completed_at=completed_at,
+                usage_json=_empty_usage().model_dump_json(),
+                verdict_json=None,
+                event_type="analysis.failed",
+                event_payload={
+                    "analysis_id": analysis_id,
+                    "status": "failed",
+                    "error_code": "analysis_timeout",
+                },
             )
         return AnalysisResult(
             analysis_id=analysis_id,
@@ -821,8 +986,44 @@ async def run_analysis(
             usage=_empty_usage(),
         )
 
-    for outcome in outcomes:
-        if isinstance(outcome, Exception):
+    escaped_errors: list[str] = []
+    for role, outcome in zip(EXPERT_ROLES, outcomes):
+        if isinstance(outcome, BaseException):
+            # Filet de dernier recours : `run_expert` nomme déjà ses échecs,
+            # donc on ne devrait jamais passer ici. Si ça arrive, on le TRACE
+            # et on le compte — jamais un `continue` muet qui ferait passer
+            # une panne pour un manque d'experts.
+            logger.exception(
+                "expert %s escaped run_expert (analysis %s)",
+                role,
+                analysis_id,
+                exc_info=outcome,
+            )
+            escaped_run_id = uuid.uuid4().hex
+            escaped_started_at = db.utc_now_iso()
+            async with (await get_connection()) as conn:
+                await db.upsert_expert_run(
+                    conn,
+                    escaped_run_id,
+                    analysis_id,
+                    role,
+                    "error",
+                    error_code="internal_error",
+                    started_at=escaped_started_at,
+                    completed_at=db.utc_now_iso(),
+                )
+                await db.insert_analysis_event(
+                    conn,
+                    analysis_id,
+                    "expert.failed",
+                    {
+                        "analysis_id": analysis_id,
+                        "role": role,
+                        "error_code": "internal_error",
+                    },
+                    db.utc_now_iso(),
+                )
+            escaped_errors.append("internal_error")
             continue
         results.append(outcome)
 
@@ -833,9 +1034,10 @@ async def run_analysis(
     ]
     verdict: ArbiterVerdict | None = None
     arbiter_usage = _empty_usage()
+    arbiter_error_code: str | None = None
 
     if len(valid) >= 2:
-        verdict, arbiter_usage = await run_arbiter(
+        verdict, arbiter_usage, arbiter_error_code = await run_arbiter(
             analysis_id=analysis_id,
             document=document,
             session=session,
@@ -844,21 +1046,24 @@ async def run_analysis(
             settings=settings,
             get_connection=get_connection,
             allowed_tools=allowed_tools,
+            document_nonce=document_nonce,
         )
         if verdict is not None and missing_roles:
             # Informations structurelles connues du seul orchestrateur : imposées.
             verdict.unavailable_agents = missing_roles
 
     if verdict is not None:
-        all_three = all(r.output is not None for r in results)
+        all_three = not missing_roles
         status = "completed" if all_three else "degraded"
         error_code = None
     elif len(valid) >= 2:
         status = "failed"
-        error_code = "arbiter_error"
+        error_code = arbiter_error_code or "arbiter_error"
     else:
         status = "failed"
-        error_code = "insufficient_expertise"
+        error_code = _dominant_failure_code(
+            [r.error_code for r in results] + escaped_errors
+        )
 
     merged = _merge_usage([r.usage for r in results] + [arbiter_usage])
     completed_at = db.utc_now_iso()

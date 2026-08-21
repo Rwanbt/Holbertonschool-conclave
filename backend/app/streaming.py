@@ -29,6 +29,7 @@ Contrats respectés :
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -46,6 +47,10 @@ LiveSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 {"role", …} / {"role", "delta", …}. La numérotation des séquences et la
 persistance SQLite sont gérées par la fermeture de l'appelant (experts.py).
 """
+
+
+class LiveSinkError(RuntimeError):
+    """La diffusion/persistance locale a échoué, pas le fournisseur LLM."""
 
 
 def normalize_delta(buffer: str, incoming: str) -> str:
@@ -343,12 +348,15 @@ class StreamCollector:
         self._parser = EnvelopeParser(max_live_chars=settings.stream_max_draft_chars)
         self._live_buffer = ""
         self._last_flush = time.monotonic()
+        self._flush_task: asyncio.Task[None] | None = None
+        self._flush_task_error: BaseException | None = None
         self._started = False
         self.protocol_error: str | None = None
         self.final_json: str | None = None
         self.live_text = ""
 
     async def feed(self, chunk: Any) -> None:
+        self._raise_flush_task_error()
         if getattr(chunk, "choices", None):
             choice = chunk.choices[0]
             delta = getattr(choice, "delta", None)
@@ -363,6 +371,7 @@ class StreamCollector:
                         self.live_text += emitted
                         self._live_buffer += emitted
                         await self._flush_size()
+                        self._schedule_time_flush()
             reason = getattr(choice, "finish_reason", None)
             if reason:
                 self.finish_reason = reason
@@ -376,6 +385,36 @@ class StreamCollector:
                 total_tokens=getattr(usage, "total_tokens", None),
             )
         await self._flush_time()
+
+    def _raise_flush_task_error(self) -> None:
+        if self._flush_task_error is not None:
+            error = self._flush_task_error
+            self._flush_task_error = None
+            raise error
+
+    def _schedule_time_flush(self) -> None:
+        if not self._live_buffer or self._flush_task is not None:
+            return
+        interval = self._settings.stream_flush_interval_ms / 1000.0
+        self._flush_task = asyncio.create_task(self._delayed_flush(interval))
+
+    async def _delayed_flush(self, interval: float) -> None:
+        try:
+            await asyncio.sleep(interval)
+            if self._live_buffer:
+                await self._flush()
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - re-raised by feed/finish
+            self._flush_task_error = exc
+        finally:
+            self._flush_task = None
+
+    def _cancel_flush_task(self) -> None:
+        task = self._flush_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+        self._flush_task = None
 
     def _feed_tool_call(self, tool_call: Any) -> None:
         index = getattr(tool_call, "index", None)
@@ -401,7 +440,19 @@ class StreamCollector:
         if self._live_sink is None or not self._response_role:
             return
         self._started = True
-        await self._live_sink("agent.response.started", {"role": self._response_role})
+        await self._emit_live(
+            "agent.response.started", {"role": self._response_role}
+        )
+
+    async def _emit_live(self, kind: str, fields: dict[str, Any]) -> None:
+        if self._live_sink is None:
+            return
+        try:
+            await self._live_sink(kind, fields)
+        except Exception as exc:  # noqa: BLE001 - distinguée du fournisseur
+            raise LiveSinkError(
+                f"live event sink failed: {exc.__class__.__name__}"
+            ) from exc
 
     async def _flush_size(self) -> None:
         if len(self._live_buffer) >= self._settings.stream_delta_batch_chars:
@@ -413,6 +464,7 @@ class StreamCollector:
             await self._flush()
 
     async def _flush(self) -> None:
+        self._cancel_flush_task()
         if not self._live_buffer:
             self._last_flush = time.monotonic()
             return
@@ -426,15 +478,17 @@ class StreamCollector:
                 continue
             if not self._started:
                 self._started = True
-                await self._live_sink(
+                await self._emit_live(
                     "agent.response.started", {"role": self._response_role}
                 )
-            await self._live_sink(
+            await self._emit_live(
                 "agent.response.delta",
                 {"role": self._response_role, "delta": piece},
             )
 
     async def finish(self) -> StreamedCompletion:
+        self._raise_flush_task_error()
+        self._cancel_flush_task()
         parser_error = self._parser.finish()
         self.final_json = self._parser.final_json
         await self._flush()
@@ -473,24 +527,29 @@ async def stream_chat_completion(
     temperature: float,
     n: int,
     tools: list[dict[str, Any]],
-    tool_choice: str,
+    tool_choice: str | None,
     settings: Settings,
     live_sink: LiveSink | None = None,
     response_role: str | None = None,
 ) -> StreamedCompletion:
     """Appelle MiniMax en streaming et reconstitue la réponse complète."""
-    stream = await client.chat.completions.create(
-        model=model,
-        messages=messages,
-        max_completion_tokens=max_completion_tokens,
-        temperature=temperature,
-        n=n,
-        tools=tools,
-        tool_choice=tool_choice,
-        stream=True,
-        stream_options={"include_usage": True},
-        extra_body={"thinking": {"type": "disabled"}},
-    )
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "max_completion_tokens": max_completion_tokens,
+        "temperature": temperature,
+        "n": n,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+        "extra_body": {"thinking": {"type": "disabled"}},
+    }
+    # Certains fournisseurs OpenAI-compatibles refusent `tools=[]` ou
+    # `tool_choice=null`. Une analyse où tous les switches sont désactivés
+    # reste donc une requête de chat valide, sans paramètres d'outils.
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = tool_choice or "auto"
+    stream = await client.chat.completions.create(**kwargs)
     collector = StreamCollector(settings, live_sink=live_sink, response_role=response_role)
     async for chunk in stream:
         await collector.feed(chunk)

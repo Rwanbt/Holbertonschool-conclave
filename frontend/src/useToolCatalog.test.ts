@@ -72,11 +72,9 @@ describe('useToolCatalog', () => {
     }
     fetchMock.mockResolvedValueOnce(jsonResponse(mutationResponse))
 
-    let togglePromise!: Promise<void>
-    act(() => {
-      togglePromise = result.current.toggle('measure_current_document')
+    await act(async () => {
+      await result.current.toggle('measure_current_document')
     })
-    await togglePromise
     await waitFor(() => expect(result.current.status).toBe('ready'))
     expect(result.current.tools.find((t) => t.tool_name === 'measure_current_document')?.enabled).toBe(
       false,
@@ -84,8 +82,9 @@ describe('useToolCatalog', () => {
 
     // Le premier GET (obsolète) répond seulement maintenant : il ne doit
     // pas écraser l'état plus récent issu de la mutation.
-    act(() => {
+    await act(async () => {
       resolveFirstRefresh(jsonResponse({ tools: [...INITIAL_TOOLS] } satisfies ToolCatalogResponse))
+      await firstRefresh
     })
     await waitFor(() =>
       expect(
