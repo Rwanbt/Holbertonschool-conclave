@@ -349,6 +349,35 @@ class TestAgentLoop:
         assert entry.output_summary["currency"] == "USD"
         assert entry.output_summary["estimated_cost_usd"] >= 0.0
 
+    def test_measure_then_cost_without_pricing_is_controlled(self, monkeypatch) -> None:
+        response = _run(
+            monkeypatch,
+            [
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(
+                        content=None,
+                        tool_calls=[_FakeToolCall("call_1", "measure_current_document", "{}")],
+                    ))]
+                ),
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(
+                        content=None,
+                        tool_calls=[_FakeToolCall("call_2", "estimate_current_analysis_cost", "{}")],
+                    ))]
+                ),
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Tarifs non configurés."))]),
+            ],
+            settings=_settings(
+                minimax_input_usd_per_million=0.0,
+                minimax_output_usd_per_million=0.0,
+            ),
+        )
+        entry = response.trace[1]
+        assert entry.status == "success"
+        assert entry.error_code is None
+        assert entry.output_summary["estimated_cost_usd"] is None
+        assert entry.output_summary["pricing_configured"] is False
+
     def test_unknown_tool_is_traced_not_fatal(self, monkeypatch) -> None:
         response = _run(
             monkeypatch,

@@ -168,6 +168,7 @@ def output_summary(tool_name: str, result: Any) -> dict[str, Any]:
                 "output_token_budget",
                 "estimated_cost_usd",
                 "currency",
+                "pricing_configured",
             )
         }
     return {}

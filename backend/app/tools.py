@@ -174,32 +174,35 @@ def estimate_analysis_cost(
     """Estime un coût d'analyse de façon déterministe (USD, arrondi 6 déc.).
 
     `pricing` = {"model_name", "input_usd_per_million_tokens",
-    "output_usd_per_million_tokens"}. Échec : `UnknownPricingError` si le
-    modèle n'a aucun tarif utilisable (absent, négatif ou à zéro).
+    "output_usd_per_million_tokens"}. Quand les tarifs sont absents, nuls,
+    négatifs ou non numériques, l'estimation reste contrôlée : le coût vaut
+    `None` et `pricing_configured` vaut `False`.
     """
-    if not pricing:
-        raise UnknownPricingError("no pricing configured")
-    model_name = str(pricing.get("model_name", "")).strip()
-    if not model_name:
-        raise UnknownPricingError("pricing has no model_name")
+    if input_tokens < 0 or output_token_budget < 0:
+        raise ValueError("token counts must be non-negative")
+
+    model_name = str(pricing.get("model_name", "unknown")).strip() or "unknown"
     input_price = pricing.get("input_usd_per_million_tokens")
     output_price = pricing.get("output_usd_per_million_tokens")
     try:
         input_price_f = float(input_price) if input_price is not None else None
         output_price_f = float(output_price) if output_price is not None else None
-    except (TypeError, ValueError) as exc:
-        raise UnknownPricingError(
-            f"pricing for '{model_name}' has non-numeric rates"
-        ) from exc
+    except (TypeError, ValueError):
+        input_price_f = output_price_f = None
     if (
         input_price_f is None
         or output_price_f is None
         or input_price_f <= 0.0
         or output_price_f <= 0.0
     ):
-        raise UnknownPricingError(f"no usable pricing for model '{model_name}'")
-    if input_tokens < 0 or output_token_budget < 0:
-        raise ValueError("token counts must be non-negative")
+        return {
+            "model_name": model_name,
+            "input_tokens": input_tokens,
+            "output_token_budget": output_token_budget,
+            "estimated_cost_usd": None,
+            "currency": "USD",
+            "pricing_configured": False,
+        }
     cost_usd = (
         input_tokens * input_price_f + output_token_budget * output_price_f
     ) / 1_000_000.0
@@ -209,4 +212,5 @@ def estimate_analysis_cost(
         "output_token_budget": output_token_budget,
         "estimated_cost_usd": round(cost_usd, 6),
         "currency": "USD",
+        "pricing_configured": True,
     }

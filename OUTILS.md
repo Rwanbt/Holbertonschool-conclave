@@ -46,7 +46,8 @@ CostEstimate = {
   model_name: str,
   input_tokens: int,
   output_token_budget: int,
-  estimated_cost_usd: float,   # arrondi à 6 décimales
+  estimated_cost_usd: float | null,   # arrondi à 6 décimales si configuré
+  pricing_configured: bool,
   currency: "USD"
 }
 
@@ -101,7 +102,7 @@ estimate_analysis_cost(
 - **Utilisé par :** adaptateur `estimate_current_analysis_cost()` de la boucle agent ; résultat fourni au Comptable.
 - **But :** fournir une estimation reproductible du coût d'un appel, séparée de l'interprétation LLM. Devise explicite (USD), arrondi documenté à 6 décimales.
 - **Effet de bord : NON.** Calcul arithmétique local.
-- **Échec défini :** `UnknownPricingError` si le modèle n'a aucun tarif configuré (tarif absent, non numérique, négatif ou à zéro) — le coût reste alors `null` dans `usage`.
+- **Tarifs absents :** renvoie un résultat contrôlé avec `estimated_cost_usd: null` et `pricing_configured: false` ; ce n'est pas une panne d'outil et ne doit jamais devenir `internal_error`.
 - **Tarifs :** `MINIMAX_INPUT_USD_PER_MILLION` / `MINIMAX_OUTPUT_USD_PER_MILLION` dans `.env` ; estiment les tarifs officiels MiniMax-M3 (standard ≤512K : 0,30 / 1,20 USD par million de jetons, promo de lancement, vérifiés le 19/08/2026 via agrégateurs tiers). Estimatifs : les seules valeurs fiables viennent de la facturation réelle MiniMax.
 
 ### 4. `run_expert` (implémenté en Palier 4 — backend/app/experts.py)
