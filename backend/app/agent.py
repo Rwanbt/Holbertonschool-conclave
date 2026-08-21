@@ -1,28 +1,31 @@
-"""Boucle agentique du Palier 3 — MiniMax décide, le serveur exécute.
+"""Boucle agentique générique (Palier 3 & 4) — MiniMax décide, le serveur exécute.
 
-Architecture :
-- ADAPTATEURS : exposent le document chargé (jamais transmis au modèle) à
-  travers trois outils SANS argument. Ils n'ont pas d'effet de bord.
-- REGISTRE : associe un nom d'outil à sa description, son schéma JSON et son
-  exécuteur. Aucun routage par mots-clés : c'est MiniMax qui choisit le nom.
-- EXÉCUTEUR : valide le nom et les arguments, applique `DISABLED_TOOLS` puis
-  exécute. Toute erreur d'outil est une entrée de trace (jamais un 500).
-- BOUCLE : au plus `MINIMAX_MAX_TOOL_ROUNDS` appels MiniMax, avec détection
-  des appels identiques répétés, accumulation des jetons et de la latence.
+Ce module contient :
+- la boucle générique `run_agent_loop` : envoie les descriptions typées,
+  laisse MiniMax choisir (`tool_choice="auto"`), valide le JSON d'arguments,
+  vérifie l'état SQLite de l'outil au moment de l'exécution, exécute
+  l'adaptateur réel, ajoute le résultat `role="tool"` avec le bon
+  `tool_call_id`, persiste la trace via un callback, et s'arrête sur une
+  sortie finale, une limite ou une répétition ;
+- le wrapper public `run_agent` (Palier 3) qui préserve sa signature et ses
+  tests et utilise la même boucle.
 
 Le prompt système et les descriptions d'outils sont recopiés dans AGENTS.md :
 toute modification ici doit y être répercutée.
 """
 
+from __future__ import annotations
+
 import json
 import time
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable
 
-from . import tools
+from . import toolkit
 from .config import Settings, get_settings
 from .llm import ProviderError, build_client
 from .schemas import AgentResponse, ExecutionUsage, ToolTraceEntry
+from .streaming import LiveSinkError, stream_chat_completion
 
 SYSTEM_PROMPT: str = (
     "Tu es un agent d'analyse documentaire du backend CONCLAVE. "
@@ -38,254 +41,361 @@ SYSTEM_PROMPT: str = (
     "en citant uniquement des valeurs observées dans les résultats d'outils."
 )
 
-TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
-    {
-        "name": "measure_current_document",
-        "description": (
-            "Analyse le document chargé sur le serveur et renvoie ses métriques : "
-            "nombre de caractères, de mots, de lignes et une estimation du nombre "
-            "de jetons d'entrée. Cet outil ne prend aucun argument."
-        ),
-        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "find_security_indicators_in_current_document",
-        "description": (
-            "Analyse le document chargé sur le serveur et renvoie jusqu'à dix indices "
-            "de sécurité locaux (clé, authentification, autorisation, injection, "
-            "vie privée, disponibilité). Cet outil ne prend aucun argument."
-        ),
-        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-    {
-        "name": "estimate_current_analysis_cost",
-        "description": (
-            "Estime le coût en dollars d'une analyse du document chargé sur le serveur, "
-            "en fonction des tarifs MiniMax configurés et du budget de sortie. "
-            "Cet outil ne prend aucun argument."
-        ),
-        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-    },
-)
+# Alias préservé pour les tests Palier 3.
+_ALLOWED_TOOL_NAMES = toolkit.ALLOWED_TOOL_NAMES
 
-_ALLOWED_TOOL_NAMES: frozenset[str] = frozenset(
-    definition["name"] for definition in TOOL_DEFINITIONS
+AgentSession = toolkit.AgentSession
+adapter_measure_current_document = toolkit.adapter_measure_current_document
+adapter_find_security_indicators_in_current_document = (
+    toolkit.adapter_find_security_indicators_in_current_document
 )
+adapter_estimate_current_analysis_cost = toolkit.adapter_estimate_current_analysis_cost
+
+
+def registry_tool_schemas(
+    allowed_tools: frozenset[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Schémas `tools` OpenAI-compatibles exposés au modèle (jamais le document).
+
+    Avec `allowed_tools` fourni, seuls ces noms sont inclus (un ensemble vide
+    renvoie une liste vide, à charge de l'appelant d'omettre `tools`)."""
+    return toolkit.registry_tool_schemas(allowed_tools)
 
 
 @dataclass
-class AgentSession:
-    """État de l'analyse : le document reste côté serveur."""
+class AgentLoopResult:
+    """Résultat d'une boucle d'outils.
 
-    document: str
-    metrics: dict[str, int] | None = None
-    findings: list[dict[str, Any]] | None = None
-
-
-def adapter_measure_current_document(
-    session: AgentSession, settings: Settings
-) -> dict[str, int]:
-    session.metrics = tools.measure_document(session.document)
-    return session.metrics
-
-
-def adapter_find_security_indicators_in_current_document(
-    session: AgentSession, settings: Settings
-) -> list[dict[str, Any]]:
-    session.findings = tools.find_security_indicators(
-        session.document, tools.DEFAULT_SECURITY_PATTERNS
-    )
-    return session.findings
-
-
-def adapter_estimate_current_analysis_cost(
-    session: AgentSession, settings: Settings
-) -> dict[str, Any]:
-    if session.metrics is None:
-        session.metrics = tools.measure_document(session.document)
-    pricing = {
-        "model_name": settings.minimax_model,
-        "input_usd_per_million_tokens": settings.minimax_input_usd_per_million,
-        "output_usd_per_million_tokens": settings.minimax_output_usd_per_million,
-    }
-    return tools.estimate_analysis_cost(
-        session.metrics["estimated_input_tokens"],
-        settings.minimax_max_output_tokens,
-        pricing,
-    )
-
-
-_TOOL_EXECUTORS: dict[str, Any] = {
-    "measure_current_document": adapter_measure_current_document,
-    "find_security_indicators_in_current_document": adapter_find_security_indicators_in_current_document,
-    "estimate_current_analysis_cost": adapter_estimate_current_analysis_cost,
-}
-
-
-def registry_tool_schemas() -> list[dict[str, Any]]:
-    """Schémas `tools` OpenAI-compatibles exposés au modèle (jamais le document).
-
-    MiniMax attend le format complet : `{"type": "function", "function": {...}}`.
+    `answer` peut être None quand la boucle s'est arrêtée sur une limite ou
+    une répétition sans sortie finale.
     """
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": definition["name"],
-                "description": definition["description"],
-                "parameters": definition["parameters"],
-            },
-        }
-        for definition in TOOL_DEFINITIONS
-    ]
+
+    answer: str | None
+    trace: list[ToolTraceEntry]
+    usage: ExecutionUsage
+    rounds: int
+    stop_reason: str | None = None
+    executed_tools: list[str] = field(default_factory=list)
+    live_text: str = field(default="", repr=False)
+    protocol_error_detail: str | None = None
+    finish_reason: str | None = None
 
 
-def _disabled_tool_names(settings: Settings) -> set[str]:
-    return {name.strip() for name in settings.disabled_tools.split(",") if name.strip()}
+ToolEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
+"""Sink de trace : `(kind, fields)` avec kind in
+{"tool.started", "tool.completed", "tool.failed"} et `fields` un dict borné
+sans le document ni le `analysis_id` (fournis par le fermeture de l'appelant).
+"""
 
 
-def _output_summary(tool_name: str, result: Any) -> dict[str, Any]:
-    if tool_name == "measure_current_document":
-        return {
-            key: result[key]
-            for key in ("character_count", "word_count", "line_count", "estimated_input_tokens")
-        }
-    if tool_name == "find_security_indicators_in_current_document":
-        return {
-            "findings_count": len(result),
-            "categories": sorted({finding["category"] for finding in result}),
-        }
-    if tool_name == "estimate_current_analysis_cost":
-        return {
-            key: result[key]
-            for key in (
-                "model_name",
-                "input_tokens",
-                "output_token_budget",
-                "estimated_cost_usd",
-                "currency",
-            )
-        }
-    return {}
+ResponseEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
+"""Sink de réponse live : `(kind, fields)` avec kind in
+{"agent.response.started", "agent.response.delta", "agent.response.completed",
+"agent.response.failed"} et `fields` bornés (sans document, sans JSON final).
+`run_agent_loop` n'émet que `started`/`delta` ; `completed`/`failed` sont
+émis par l'appelant après validation Pydantic du JSON final.
+"""
 
 
-def _execute_tool(
-    name: str, session: AgentSession, settings: Settings
-) -> tuple[str, dict[str, Any], str | None, dict[str, Any] | None]:
-    """Exécute un outil : (status, payload, error_code, output_summary)."""
-    if name in _disabled_tool_names(settings):
-        return (
-            "error",
-            {"error": {"code": "tool_disabled", "message": "Requested tool is unavailable"}},
-            "tool_disabled",
-            None,
-        )
-    executor = _TOOL_EXECUTORS.get(name)
-    if executor is None:
-        return (
-            "error",
-            {"error": {"code": "unknown_tool", "message": f"Unknown tool: {name}"}},
-            "unknown_tool",
-            None,
-        )
-    try:
-        result = executor(session, settings)
-    except Exception as exc:  # noqa: BLE001 - toute panne d'outil devient une trace
-        return (
-            "error",
-            {
-                "error": {
-                    "code": "internal_error",
-                    "message": f"Tool execution failed: {exc.__class__.__name__}",
-                }
-            },
-            "internal_error",
-            None,
-        )
-    return "success", result, None, _output_summary(name, result)
+RoundEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
+"""Sink de progression observable : `(kind, fields)` avec kind in
+{"agent.round.started", "agent.round.completed"} et fields
+{"round", "max_rounds"} / {"round", "outcome", "latency_ms"}. `outcome` in
+{"tool_calls", "final_response", "protocol_error", "provider_error",
+"max_rounds"}. Décrit l'exécution sans exposer la réflexion privée du modèle.
+"""
 
 
-def _pricing_from_settings(settings: Settings) -> dict[str, Any]:
-    return {
-        "model_name": settings.minimax_model,
-        "input_usd_per_million_tokens": settings.minimax_input_usd_per_million,
-        "output_usd_per_million_tokens": settings.minimax_output_usd_per_million,
-    }
+async def run_agent_loop(
+    messages: list[dict[str, Any]],
+    session: AgentSession,
+    settings: Settings,
+    *,
+    max_rounds: int,
+    one_tool_per_round: bool = False,
+    tool_event_sink: ToolEventSink | None = None,
+    agent_role: str = "assistant",
+    get_connection: Callable[[], Awaitable[Any]] | None = None,
+    max_output_tokens: int | None = None,
+    response_event_sink: ResponseEventSink | None = None,
+    stream_final_envelope: bool = False,
+    allowed_tools: frozenset[str] | None = None,
+    round_event_sink: RoundEventSink | None = None,
+    required_tools_before_final: frozenset[str] = frozenset(),
+) -> AgentLoopResult:
+    """Boucle générique bornée. `get_connection` alimente l'état SQLite des outils
+    (repli Palier 3 quand `allowed_tools` n'est pas fourni).
 
+    `allowed_tools`, quand fourni (Palier 4), fige la configuration des outils
+    de CETTE analyse : seuls ces schémas sont envoyés à MiniMax (un ensemble
+    vide omet `tools`/`tool_choice` plutôt que d'envoyer une liste vide), et
+    `toolkit.execute_tool` revérifie cette même liste à l'exécution — un appel
+    fabriqué pour un outil non autorisé est refusé même si son schéma n'a
+    jamais été envoyé au modèle.
 
-def _estimated_cost_usd(settings: Settings, input_tokens: int, output_tokens: int) -> float | None:
-    try:
-        estimate = tools.estimate_analysis_cost(
-            input_tokens, output_tokens, _pricing_from_settings(settings)
-        )
-    except (tools.UnknownPricingError, ValueError):
-        return None
-    return estimate["estimated_cost_usd"]
-
-
-async def run_agent(
-    instruction: str, document: str, settings: Settings | None = None
-) -> AgentResponse:
-    """Boucle agentique : MiniMax appelle des outils, le serveur les exécute."""
-    current = settings if settings is not None else get_settings()
-    max_rounds = max(1, current.minimax_max_tool_rounds)
-
-    session = AgentSession(document=document)
-    messages: list[dict[str, Any]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": instruction},
-    ]
+    Avec `stream_final_envelope=True` (Palier 4), chaque appel MiniMax est
+    streamé et la réponse finale doit être l'enveloppe
+    `<LIVE_RESPONSE>…</LIVE_RESPONSE><FINAL_JSON>…</FINAL_JSON>` : le texte live
+    est diffusé par `response_event_sink`, le JSON final est extrait dans
+    `answer`. Une violation de protocole (JSON seul, live vide, marqueurs
+    invalides) est remontée avec son sous-code à l'appelant. La réparation
+    structurée est volontairement faite ensuite, sans outils et sans
+    streaming, par l'expert ou l'arbitre : une réparation ne peut ainsi ni
+    rappeler un outil ni répéter l'enveloppe défectueuse.
+    """
+    output_budget = max_output_tokens or settings.minimax_max_output_tokens
+    # Les outils actuels sont locaux, déterministes et sans effet de bord. Une
+    # répétition exacte d'un appel déjà réussi peut donc réutiliser son résultat
+    # sans refaire le calcul ni invalider tout l'expert. Seuls les succès sont
+    # mémorisés : un appel échoué (pré-requis manquant, par exemple) doit rester
+    # retentable après que le contexte a changé.
+    successful_call_cache: dict[
+        tuple[str, str], tuple[Any, dict[str, Any] | None]
+    ] = {}
     trace: list[ToolTraceEntry] = []
-    executed_calls: set[tuple[str, str]] = set()
+    executed_tools: list[str] = []
+    tool_schemas = registry_tool_schemas(allowed_tools)
 
     total_input = 0
     total_output = 0
     total_tokens = 0
     any_usage = False
     total_latency_ms = 0
-    rounds = 0
     answer: str | None = None
+    live_text = ""
+    stop = False
+    stop_reason: str | None = None
+    protocol_error_detail: str | None = None
+    finish_reason: str | None = None
 
-    async with build_client(current) as client:
-        while rounds < max_rounds:
-            rounds += 1
-            started = time.monotonic()
-            try:
-                completion = await client.chat.completions.create(
-                    model=current.minimax_model,
-                    messages=messages,
-                    max_completion_tokens=current.minimax_max_output_tokens,
-                    temperature=0.3,
-                    n=1,
-                    tools=registry_tool_schemas(),
-                    tool_choice="auto",
-                    extra_body={"thinking": {"type": "disabled"}},
+    def record_usage(completion: Any) -> None:
+        nonlocal any_usage, total_input, total_output, total_tokens
+        if completion.usage is None:
+            return
+        any_usage = True
+        total_input += completion.usage.prompt_tokens or 0
+        total_output += completion.usage.completion_tokens or 0
+        total_tokens += completion.usage.total_tokens or 0
+
+    async def emit_round_completed(
+        round_number: int,
+        outcome: str,
+        latency_ms: int,
+        **diagnostics: Any,
+    ) -> None:
+        if round_event_sink is not None:
+            payload = {
+                "round": round_number,
+                "outcome": outcome,
+                "latency_ms": latency_ms,
+            }
+            payload.update(
+                {key: value for key, value in diagnostics.items() if value is not None}
+            )
+            await round_event_sink(
+                "agent.round.completed",
+                payload,
+            )
+
+    async with build_client(settings) as client:
+        # Boucle visible et montrable : chaque round est un appel MiniMax.
+        for round_number in range(1, max_rounds + 1):
+            if round_event_sink is not None:
+                await round_event_sink(
+                    "agent.round.started",
+                    {"round": round_number, "max_rounds": max_rounds},
                 )
+            started = time.monotonic()
+
+            async def _call(msgs: list[dict[str, Any]]):
+                if stream_final_envelope:
+                    return await stream_chat_completion(
+                        client,
+                        model=settings.minimax_model,
+                        messages=msgs,
+                        max_completion_tokens=output_budget,
+                        temperature=0.3,
+                        n=1,
+                        tools=tool_schemas,
+                        tool_choice="auto" if tool_schemas else None,
+                        settings=settings,
+                        live_sink=response_event_sink,
+                        response_role=agent_role,
+                    )
+                kwargs: dict[str, Any] = {
+                    "model": settings.minimax_model,
+                    "messages": msgs,
+                    "max_completion_tokens": output_budget,
+                    "temperature": 0.3,
+                    "n": 1,
+                    "extra_body": {"thinking": {"type": "disabled"}},
+                }
+                if tool_schemas:
+                    kwargs["tools"] = tool_schemas
+                    kwargs["tool_choice"] = "auto"
+                return await client.chat.completions.create(**kwargs)
+
+            try:
+                completion = await _call(messages)
+            except LiveSinkError:
+                # Une panne SQLite/UI dans le sink n'est pas une panne MiniMax.
+                # L'appelant la trace comme erreur interne.
+                raise
             except Exception as exc:  # noqa: BLE001 - toute cause mène au 502
+                round_latency_ms = int((time.monotonic() - started) * 1000)
+                total_latency_ms += round_latency_ms
+                await emit_round_completed(
+                    round_number, "provider_error", round_latency_ms
+                )
                 raise ProviderError(
                     f"MiniMax agent request failed: {exc.__class__.__name__}"
                 ) from exc
-            total_latency_ms += int((time.monotonic() - started) * 1000)
+            record_usage(completion)
 
-            if completion.usage is not None:
-                any_usage = True
-                total_input += completion.usage.prompt_tokens or 0
-                total_output += completion.usage.completion_tokens or 0
-                total_tokens += completion.usage.total_tokens or 0
+            round_latency_ms = int((time.monotonic() - started) * 1000)
+            total_latency_ms += round_latency_ms
 
             if not completion.choices:
+                await emit_round_completed(
+                    round_number, "provider_error", round_latency_ms
+                )
                 raise ProviderError("MiniMax agent returned no choices")
 
             message = completion.choices[0].message
             tool_calls = message.tool_calls or []
+            finish_reason = getattr(completion.choices[0], "finish_reason", None)
+
+            if stream_final_envelope:
+                if completion.protocol_error is not None:
+                    live_text = completion.live_text or live_text
+                    protocol_error_detail = completion.protocol_error
+                    if tool_calls:
+                        stop = True
+                        stop_reason = "protocol_error"
+                        await emit_round_completed(
+                            round_number,
+                            "protocol_error",
+                            round_latency_ms,
+                            protocol_error=protocol_error_detail,
+                            finish_reason=finish_reason,
+                            content_chars=len(message.content or ""),
+                            live_chars=len(completion.live_text or ""),
+                            final_json_chars=len(completion.final_json or ""),
+                            repair_required=False,
+                        )
+                        break
+                    missing_required_now = (
+                        required_tools_before_final - set(executed_tools)
+                    )
+                    if missing_required_now:
+                        # La priorité est d'obtenir les preuves obligatoires.
+                        # Le tour sera classé `missing_required_tools` dans la
+                        # branche sans outil ci-dessous, puis la boucle reprend.
+                        final_json = (completion.final_json or "").strip()
+                        if completion.live_text:
+                            live_text = completion.live_text
+                    else:
+                        # Conserve la matière reçue afin que `run_expert` ou
+                        # `run_arbiter` puisse lancer UNE réparation JSON dédiée,
+                        # sans outils. Le brouillon live reste visible mais n'est
+                        # jamais pris pour une sortie validée.
+                        answer = (completion.final_json or message.content or "").strip()
+                        stop_reason = "protocol_error"
+                        await emit_round_completed(
+                            round_number,
+                            "protocol_error",
+                            round_latency_ms,
+                            protocol_error=protocol_error_detail,
+                            finish_reason=finish_reason,
+                            content_chars=len(message.content or ""),
+                            live_chars=len(completion.live_text or ""),
+                            final_json_chars=len(completion.final_json or ""),
+                            repair_required=True,
+                        )
+                        break
+                final_json = (completion.final_json or "").strip()
+                if completion.live_text:
+                    live_text = completion.live_text
+            else:
+                final_json = ""
 
             if not tool_calls:
+                missing_required = sorted(
+                    required_tools_before_final - set(executed_tools)
+                )
+                if missing_required:
+                    await emit_round_completed(
+                        round_number,
+                        "missing_required_tools",
+                        round_latency_ms,
+                        missing_tools=missing_required,
+                        protocol_error=protocol_error_detail,
+                    )
+                    if round_number >= max_rounds:
+                        stop = True
+                        stop_reason = "max_rounds_reached"
+                        break
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": message.content or None,
+                        }
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Ta conclusion est prématurée. Demande maintenant, "
+                                "sans conclure, le prochain outil obligatoire manquant : "
+                                + ", ".join(missing_required)
+                                + ". Un seul outil par tour."
+                            ),
+                        }
+                    )
+                    continue
                 content = (message.content or "").strip()
-                if not content:
+                if not content and not final_json:
+                    await emit_round_completed(
+                        round_number, "provider_error", round_latency_ms
+                    )
                     raise ProviderError("MiniMax agent returned an empty answer")
-                answer = content
+                answer = final_json or content
+                await emit_round_completed(
+                    round_number, "final_response", round_latency_ms
+                )
                 break
 
+            if round_number >= max_rounds:
+                await emit_round_completed(
+                    round_number, "max_rounds", round_latency_ms
+                )
+                for call in tool_calls:
+                    _append_trace_error(
+                        trace,
+                        call.function.name,
+                        "max_rounds_reached",
+                        {"tool": call.function.name},
+                    )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": call.function.name,
+                                "status": "error",
+                                "input_summary": {"tool": call.function.name},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "max_rounds_reached",
+                            },
+                        )
+                stop = True
+                stop_reason = "max_rounds_reached"
+                break
+
+            await emit_round_completed(round_number, "tool_calls", round_latency_ms)
             messages.append(
                 {
                     "role": "assistant",
@@ -304,23 +414,52 @@ async def run_agent(
                 }
             )
 
-            if rounds >= max_rounds:
-                for call in tool_calls:
-                    trace.append(
-                        ToolTraceEntry(
-                            sequence=len(trace) + 1,
-                            tool_name=call.function.name,
-                            status="error",
-                            input_summary={"tool": call.function.name},
-                            output_summary=None,
-                            duration_ms=0,
-                            error_code="max_rounds_reached",
-                        )
+            deferred = tool_calls[1:] if one_tool_per_round else []
+            reused_successful_call = False
+            for index, call in enumerate(tool_calls):
+                if deferred and index > 0:
+                    _append_trace_error(
+                        trace,
+                        call.function.name,
+                        "one_tool_per_round",
+                        {"tool": call.function.name},
                     )
-                break
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": call.function.name,
+                                "status": "error",
+                                "input_summary": {"tool": call.function.name},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "one_tool_per_round",
+                            },
+                        )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "name": call.function.name,
+                            "content": json.dumps(
+                                {
+                                    "error": {
+                                        "code": "one_tool_per_round",
+                                        "message": (
+                                            "Un seul outil par tour : redemande cet appel "
+                                            "au tour suivant."
+                                        ),
+                                    }
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    )
+                    continue
 
-            stop = False
-            for call in tool_calls:
                 name = call.function.name
                 arguments_raw = (call.function.arguments or "").strip()
                 try:
@@ -328,20 +467,27 @@ async def run_agent(
                     if not isinstance(arguments, dict):
                         raise ValueError("tool arguments must be a JSON object")
                 except (ValueError, json.JSONDecodeError) as exc:
-                    trace.append(
-                        ToolTraceEntry(
-                            sequence=len(trace) + 1,
-                            tool_name=name,
-                            status="error",
-                            input_summary={
-                                "requested_tool": name,
-                                "arguments_preview": arguments_raw[:200],
-                            },
-                            output_summary=None,
-                            duration_ms=0,
-                            error_code="invalid_arguments",
-                        )
+                    _append_trace_error(
+                        trace,
+                        name,
+                        "invalid_arguments",
+                        {"requested_tool": name, "arguments_preview": arguments_raw[:200]},
                     )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": name,
+                                "status": "error",
+                                "input_summary": {"requested_tool": name},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "invalid_arguments",
+                            },
+                        )
                     messages.append(
                         {
                             "role": "tool",
@@ -361,44 +507,57 @@ async def run_agent(
                     continue
 
                 call_key = (name, json.dumps(arguments, sort_keys=True))
-                if call_key in executed_calls:
+                cached = successful_call_cache.get(call_key)
+                if cached is not None:
+                    cached_payload, cached_output_summary = cached
+                    output_summary = dict(cached_output_summary or {})
+                    output_summary["cache_reused"] = True
                     trace.append(
                         ToolTraceEntry(
                             sequence=len(trace) + 1,
                             tool_name=name,
-                            status="error",
-                            input_summary={"tool": name, "identical_call": True},
-                            output_summary=None,
+                            status="success",
+                            input_summary={"tool": name, "cache_reused": True},
+                            output_summary=output_summary,
                             duration_ms=0,
-                            error_code="repeated_tool_call",
+                            error_code=None,
                         )
                     )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.completed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": name,
+                                "status": "success",
+                                "input_summary": {"tool": name, "cache_reused": True},
+                                "output_summary": output_summary,
+                                "duration_ms": 0,
+                                "error_code": None,
+                            },
+                        )
                     messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": call.id,
                             "name": name,
-                            "content": json.dumps(
-                                {
-                                    "error": {
-                                        "code": "repeated_tool_call",
-                                        "message": (
-                                            "Identical tool call repeated; "
-                                            "stopping to avoid an infinite loop."
-                                        ),
-                                    }
-                                },
-                                ensure_ascii=False,
-                            ),
+                            "content": json.dumps(cached_payload, ensure_ascii=False),
                         }
                     )
-                    stop = True
+                    reused_successful_call = True
                     continue
-                executed_calls.add(call_key)
+
+                if tool_event_sink is not None:
+                    await tool_event_sink(
+                        "tool.started",
+                        {"agent_role": agent_role, "llm_round": round_number, "tool_name": name},
+                    )
 
                 started_tool = time.monotonic()
-                status, payload, error_code, output_summary = _execute_tool(
-                    name, session, current
+                status, payload, error_code, output_summary = await toolkit.execute_tool(
+                    name, session, settings, get_connection, allowed_tools=allowed_tools
                 )
                 duration_ms = int((time.monotonic() - started_tool) * 1000)
                 trace.append(
@@ -412,6 +571,24 @@ async def run_agent(
                         error_code=error_code,
                     )
                 )
+                if status == "success":
+                    executed_tools.append(name)
+                    successful_call_cache[call_key] = (payload, output_summary)
+                if tool_event_sink is not None:
+                    await tool_event_sink(
+                        "tool.completed" if status == "success" else "tool.failed",
+                        {
+                            "agent_role": agent_role,
+                            "llm_round": round_number,
+                            "sequence": len(trace),
+                            "tool_name": name,
+                            "status": status,
+                            "input_summary": {"tool": name},
+                            "output_summary": output_summary if status == "success" else None,
+                            "duration_ms": duration_ms,
+                            "error_code": error_code,
+                        },
+                    )
                 messages.append(
                     {
                         "role": "tool",
@@ -421,11 +598,85 @@ async def run_agent(
                     }
                 )
 
+            if reused_successful_call and not stop:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "Ce résultat d'outil avait déjà été obtenu et vient d'être "
+                            "réutilisé. Ne redemande pas exactement le même appel. "
+                            "Utilise les résultats disponibles pour conclure, ou demande "
+                            "un autre outil seulement s'il est encore nécessaire."
+                        ),
+                    }
+                )
+
             if stop:
                 break
 
-    if answer is None:
-        if rounds >= max_rounds:
+    usage = ExecutionUsage(
+        input_tokens=total_input if any_usage else None,
+        output_tokens=total_output if any_usage else None,
+        total_tokens=total_tokens if any_usage else None,
+        estimated_cost_usd=(
+            toolkit.estimated_cost_usd(settings, total_input, total_output)
+            if any_usage
+            else None
+        ),
+        total_latency_ms=total_latency_ms,
+        llm_rounds=max(1, round_number if answer is not None else round_number),
+    )
+    return AgentLoopResult(
+        answer=answer,
+        trace=trace,
+        usage=usage,
+        rounds=round_number,
+        stop_reason=stop_reason,
+        executed_tools=executed_tools,
+        live_text=live_text,
+        protocol_error_detail=protocol_error_detail,
+        finish_reason=finish_reason,
+    )
+
+
+def _append_trace_error(
+    trace: list[ToolTraceEntry],
+    tool_name: str,
+    error_code: str,
+    input_summary: dict[str, Any],
+) -> None:
+    trace.append(
+        ToolTraceEntry(
+            sequence=len(trace) + 1,
+            tool_name=tool_name,
+            status="error",
+            input_summary=input_summary,
+            output_summary=None,
+            duration_ms=0,
+            error_code=error_code,
+        )
+    )
+
+
+async def run_agent(
+    instruction: str, document: str, settings: Settings | None = None
+) -> AgentResponse:
+    """Wrapper Palier 3 — signature publique et tests préservés."""
+    current = settings if settings is not None else get_settings()
+    session = AgentSession(document=document)
+    result = await run_agent_loop(
+        [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": instruction},
+        ],
+        session,
+        current,
+        max_rounds=max(1, current.minimax_max_tool_rounds),
+        agent_role="assistant",
+        get_connection=None,
+    )
+    if result.answer is None:
+        if result.rounds >= max(1, current.minimax_max_tool_rounds):
             answer = (
                 "Je n'ai pas pu finaliser la demande : la limite d'itérations a été "
                 "atteinte. Je ne peux pas vérifier le résultat demandé."
@@ -435,17 +686,11 @@ async def run_agent(
                 "Je ne peux pas vérifier l'information demandée avec les outils "
                 "disponibles sur le serveur."
             )
-
-    usage = ExecutionUsage(
-        input_tokens=total_input if any_usage else None,
-        output_tokens=total_output if any_usage else None,
-        total_tokens=total_tokens if any_usage else None,
-        estimated_cost_usd=(
-            _estimated_cost_usd(current, total_input, total_output) if any_usage else None
-        ),
-        total_latency_ms=total_latency_ms,
-        llm_rounds=rounds,
-    )
+    else:
+        answer = result.answer
     return AgentResponse(
-        answer=answer, model=current.minimax_model, trace=trace, usage=usage
+        answer=answer,
+        model=current.minimax_model,
+        trace=result.trace,
+        usage=result.usage,
     )

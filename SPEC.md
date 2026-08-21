@@ -1,10 +1,10 @@
 # SPEC — CONCLAVE
 
-**Version :** Palier 1 — cadrage gelé  
+**Version :** Palier 4 — cadrage gelé
 **Équipe :** Erwan + Yo  
 **Pitch :** un même document, trois lectures contradictoires, un verdict exploitable.
 
-**Stack figée :** React + TypeScript + Vite ; FastAPI + Python + Pydantic + `asyncio` ; API MiniMax avec le modèle `MiniMax-M3` ; état éphémère en mémoire.
+**Stack figée :** React + TypeScript + Vite ; FastAPI + Python + Pydantic + `asyncio` ; API MiniMax avec le modèle `MiniMax-M3` ; persistance SQLite durable (`aiosqlite`).
 
 ## Le problème — exactement 5 lignes
 
@@ -21,7 +21,7 @@
 3. Pas de navigation web ni d'enrichissement par une source externe.
 4. Pas d'exécution du code analysé, de shell, de sandbox ou de scan réel d'une infrastructure.
 5. Pas de compte, d'authentification, d'organisation ni de gestion de droits.
-6. Pas d'historique durable, de base de données, d'export ou de reprise d'une analyse après redémarrage du serveur.
+6. Pas de multi-utilisateur, de partage d'analyse entre comptes ni de synchronisation distante.
 7. Pas de reprise automatique d'un flux SSE interrompu ; l'utilisateur relance l'analyse.
 8. Pas de traitement parallèle de plusieurs analyses par un même utilisateur.
 9. Pas de sélection dynamique entre plusieurs fournisseurs LLM ni de bascule automatique vers un autre modèle.
@@ -39,7 +39,8 @@
 4. Valider chaque résultat final avec un contrat structuré avant de le transmettre à l'Arbitre.
 5. Faire produire à l'**Arbitre** un verdict structuré : décision, score, désaccords, risques, actions et compromis.
 6. Continuer en mode dégradé si un agent échoue ou dépasse son délai, à condition d'obtenir au moins deux analyses valides.
-7. Conserver uniquement un état temporaire en mémoire, supprimé au plus tard 15 minutes après la fin de l'analyse.
+7. Persister les analyses, les runs d'experts, les événements et les états d'outils dans une base SQLite durable (`./data/conclave.db`), reprise après redémarrage du serveur.
+8. Permettre à l'utilisateur d'activer/désactiver chaque outil du backend via la grammaire `/tools`, sans redémarrage.
 
 ## User stories — 3 maximum
 
@@ -79,6 +80,10 @@ Les trois experts n'appellent jamais l'Arbitre. L'orchestrateur valide leurs sor
 * Deux analyses valides suffisent à produire un verdict dégradé ; avec zéro ou une analyse valide, aucun verdict n'est inventé.
 * Le SSE diffuse des changements d'état et des résultats complets, pas les tokens bruts du LLM. Cela garde le temps réel sans exposer du JSON partiel ou invalide au front.
 * Tout contenu LLM est rendu comme texte, jamais comme HTML.
+* Chaque événement du flux est **persisté en base avant d'être diffusé**, et identifié par un entier croissant : le front peut reprendre un flux coupé via `Last-Event-ID` ou `?after=<id>`.
+* Une analyse en cours au moment d'un redémarrage du serveur passe en `interrupted` ; les résultats déjà persistés restent consultables.
+* Les états d'outils vivent dans la table SQLite `tool_states` (source de vérité), modifiables uniquement par `POST /api/tool-commands` ; `DISABLED_TOOLS` ne fait qu'initialiser une base neuve.
+* Le document peut être transmis à MiniMax pour les rôles experts/arbitre (SPÉC) mais n'est **jamais journalisé** : les événements et traces ne contiennent que des résumés bornés.
 
 ## Critères de réussite du Palier 4
 

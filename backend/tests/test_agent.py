@@ -74,8 +74,10 @@ class _FakeCompletion:
 class _FakeCompletions:
     def __init__(self, responses):
         self._responses = list(responses)
+        self.created_kwargs: list[dict] = []
 
     async def create(self, **kwargs):
+        self.created_kwargs.append(kwargs)
         if not self._responses:
             raise AssertionError("agent loop called the provider too many times")
         return self._responses.pop(0)
@@ -117,8 +119,123 @@ class TestRegistry:
             # par les arguments d'outil.
             assert schema["function"]["parameters"]["properties"] == {}
 
+    def test_allowed_tools_filters_schemas(self) -> None:
+        allowed = frozenset({"measure_current_document"})
+        schemas = agent.registry_tool_schemas(allowed)
+        names = {schema["function"]["name"] for schema in schemas}
+        assert names == allowed
+
+    def test_empty_allowed_tools_yields_empty_schema_list(self) -> None:
+        assert agent.registry_tool_schemas(frozenset()) == []
+
+    def test_zero_tools_omits_tools_kwarg_without_provider_error(self, monkeypatch) -> None:
+        client = _FakeClient(
+            [_FakeCompletion([_FakeChoice(_FakeMessage(content="Je ne peux pas vérifier."))])]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda s: client)
+
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse le document."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=3,
+                allowed_tools=frozenset(),
+            )
+        )
+        assert result.answer == "Je ne peux pas vérifier."
+        assert "tools" not in client.chat.completions.created_kwargs[0]
+        assert "tool_choice" not in client.chat.completions.created_kwargs[0]
+
 
 class TestAgentLoop:
+    def test_premature_final_response_is_rejected_until_required_tool_runs(
+        self, monkeypatch
+    ) -> None:
+        client = _FakeClient(
+            [
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion prématurée."))]),
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_1", "measure_current_document", "{}"
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                ),
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion valide."))]),
+            ]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+        events: list[tuple[str, dict]] = []
+
+        async def round_sink(kind: str, fields: dict) -> None:
+            events.append((kind, dict(fields)))
+
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=4,
+                required_tools_before_final=frozenset(
+                    {"measure_current_document"}
+                ),
+                round_event_sink=round_sink,
+            )
+        )
+
+        assert result.answer == "Conclusion valide."
+        assert result.executed_tools == ["measure_current_document"]
+        completed = [fields for kind, fields in events if kind == "agent.round.completed"]
+        assert completed[0]["outcome"] == "missing_required_tools"
+
+    def test_rejected_tool_call_is_sent_to_event_sink(self, monkeypatch) -> None:
+        events: list[tuple[str, dict]] = []
+
+        async def sink(kind: str, fields: dict) -> None:
+            events.append((kind, fields))
+
+        client = _FakeClient(
+            [
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(
+                        content=None,
+                        tool_calls=[_FakeToolCall("call_1", "measure_current_document", "not-json")],
+                    ))]
+                ),
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Refus."))]),
+            ]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda s: client)
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse le document."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=3,
+                tool_event_sink=sink,
+            )
+        )
+
+        assert result.trace[0].error_code == "invalid_arguments"
+        assert events[0][0] == "tool.failed"
+        assert events[0][1]["error_code"] == "invalid_arguments"
+
     def test_simple_request_without_tools(self, monkeypatch) -> None:
         response = _run(
             monkeypatch,
@@ -208,7 +325,10 @@ class TestAgentLoop:
         assert "secret" in entry.output_summary["categories"]
         assert response.answer == "Un indice secret trouvé."
 
-    def test_cost_then_answer(self, monkeypatch) -> None:
+    def test_cost_without_prior_measure_is_missing_prerequisite(self, monkeypatch) -> None:
+        # R1 : plus de mesure implicite — estimer le coût sans avoir mesuré
+        # le document échoue proprement (missing_prerequisite) au lieu
+        # d'inventer une mesure silencieuse.
         response = _run(
             monkeypatch,
             [
@@ -227,14 +347,89 @@ class TestAgentLoop:
                     ]
                 ),
                 _FakeCompletion(
-                    [_FakeChoice(_FakeMessage(content="Le coût estimé est calculé."))]
+                    [_FakeChoice(_FakeMessage(content="Je ne peux pas vérifier."))]
                 ),
             ],
         )
         entry = response.trace[0]
+        assert entry.status == "error"
+        assert entry.error_code == "missing_prerequisite"
+
+    def test_measure_then_cost_succeeds(self, monkeypatch) -> None:
+        response = _run(
+            monkeypatch,
+            [
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                content=None,
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_1", "measure_current_document", "{}"
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                content=None,
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_2", "estimate_current_analysis_cost", "{}"
+                                    )
+                                ],
+                            )
+                        )
+                    ]
+                ),
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(content="Le coût estimé est calculé."))]
+                ),
+            ],
+            settings=_settings(minimax_max_tool_rounds=3),
+        )
+        entry = response.trace[1]
         assert entry.status == "success"
         assert entry.output_summary["currency"] == "USD"
         assert entry.output_summary["estimated_cost_usd"] >= 0.0
+
+    def test_measure_then_cost_without_pricing_is_controlled(self, monkeypatch) -> None:
+        response = _run(
+            monkeypatch,
+            [
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(
+                        content=None,
+                        tool_calls=[_FakeToolCall("call_1", "measure_current_document", "{}")],
+                    ))]
+                ),
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(
+                        content=None,
+                        tool_calls=[_FakeToolCall("call_2", "estimate_current_analysis_cost", "{}")],
+                    ))]
+                ),
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Tarifs non configurés."))]),
+            ],
+            settings=_settings(
+                minimax_input_usd_per_million=0.0,
+                minimax_output_usd_per_million=0.0,
+            ),
+        )
+        entry = response.trace[1]
+        assert entry.status == "success"
+        assert entry.error_code is None
+        assert entry.output_summary["estimated_cost_usd"] is None
+        assert entry.output_summary["pricing_configured"] is False
+        assumptions = entry.output_summary["assumptions"]
+        assert assumptions["expert_count"] == 3
+        assert assumptions["arbiter_count"] == 1
+        assert assumptions["estimated_llm_calls"] > 1
 
     def test_unknown_tool_is_traced_not_fatal(self, monkeypatch) -> None:
         response = _run(
@@ -374,7 +569,9 @@ class TestAgentLoop:
         assert response.trace[2].error_code == "max_rounds_reached"
         assert "limite d'itérations" in response.answer
 
-    def test_repeated_identical_call_stops(self, monkeypatch) -> None:
+    def test_repeated_successful_call_reuses_cached_result_then_concludes(
+        self, monkeypatch
+    ) -> None:
         responses = [
             _FakeCompletion(
                 [
@@ -400,14 +597,80 @@ class TestAgentLoop:
                     )
                 ]
             ),
+            _FakeCompletion([_FakeChoice(_FakeMessage(content="Fait."))]),
         ]
         response = _run(monkeypatch, responses)
-        assert response.usage.llm_rounds == 2
+        assert response.usage.llm_rounds == 3
         assert len(response.trace) == 2
         assert response.trace[0].status == "success"
-        assert response.trace[1].status == "error"
-        assert response.trace[1].error_code == "repeated_tool_call"
-        assert "ne peux pas vérifier" in response.answer
+        assert response.trace[1].status == "success"
+        assert response.trace[1].error_code is None
+        assert response.trace[1].input_summary["cache_reused"] is True
+        assert response.trace[1].output_summary["cache_reused"] is True
+        assert response.answer == "Fait."
+
+    def test_failed_call_can_be_retried_after_prerequisite_changes(
+        self, monkeypatch
+    ) -> None:
+        responses = [
+            _FakeCompletion(
+                [
+                    _FakeChoice(
+                        _FakeMessage(
+                            tool_calls=[
+                                _FakeToolCall(
+                                    "cost_early",
+                                    "estimate_current_analysis_cost",
+                                    "{}",
+                                )
+                            ]
+                        )
+                    )
+                ]
+            ),
+            _FakeCompletion(
+                [
+                    _FakeChoice(
+                        _FakeMessage(
+                            tool_calls=[
+                                _FakeToolCall(
+                                    "measure", "measure_current_document", "{}"
+                                )
+                            ]
+                        )
+                    )
+                ]
+            ),
+            _FakeCompletion(
+                [
+                    _FakeChoice(
+                        _FakeMessage(
+                            tool_calls=[
+                                _FakeToolCall(
+                                    "cost_retry",
+                                    "estimate_current_analysis_cost",
+                                    "{}",
+                                )
+                            ]
+                        )
+                    )
+                ]
+            ),
+            _FakeCompletion([_FakeChoice(_FakeMessage(content="Coût vérifié."))]),
+        ]
+
+        response = _run(
+            monkeypatch,
+            responses,
+            settings=_settings(minimax_max_tool_rounds=4),
+        )
+
+        assert [entry.error_code for entry in response.trace] == [
+            "missing_prerequisite",
+            None,
+            None,
+        ]
+        assert response.answer == "Coût vérifié."
 
     def test_usage_accumulates_tokens_and_latency(self, monkeypatch) -> None:
         response = _run(
@@ -463,3 +726,68 @@ class TestAgentLoop:
                 ],
             )
         assert isinstance(exc_info.value, agent.ProviderError)
+
+    def test_provider_error_closes_the_visible_round(self, monkeypatch) -> None:
+        client = _FakeClient([_FakeCompletion([], usage=None)])
+        monkeypatch.setattr(agent, "build_client", lambda _settings: client)
+        events: list[tuple[str, dict]] = []
+
+        async def round_sink(kind: str, fields: dict) -> None:
+            events.append((kind, dict(fields)))
+
+        async def run() -> None:
+            await agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse le document."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=3,
+                round_event_sink=round_sink,
+            )
+
+        with pytest.raises(agent.ProviderError):
+            asyncio.run(run())
+        assert events[0][0] == "agent.round.started"
+        assert events[-1][0] == "agent.round.completed"
+        assert events[-1][1]["outcome"] == "provider_error"
+
+    def test_round_limit_has_the_correct_visible_outcome(self, monkeypatch) -> None:
+        client = _FakeClient(
+            [
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_1", "measure_current_document", "{}"
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                )
+            ]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda _settings: client)
+        events: list[tuple[str, dict]] = []
+
+        async def round_sink(kind: str, fields: dict) -> None:
+            events.append((kind, dict(fields)))
+
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse le document."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=1,
+                round_event_sink=round_sink,
+            )
+        )
+        assert result.stop_reason == "max_rounds_reached"
+        assert events[-1][1]["outcome"] == "max_rounds"

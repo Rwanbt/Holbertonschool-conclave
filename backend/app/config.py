@@ -45,7 +45,103 @@ class Settings(BaseSettings):
     )
     disabled_tools: str = Field(
         "",
-        description="Outils désactivés, séparés par des virgules (jamais modifiables via l'API).",
+        description=(
+            "Outils désactivés à l'initialisation d'une base SQLite neuve "
+            "(séparés par des virgules). Ensuite la table tool_states fait foi."
+        ),
+    )
+
+    database_path: str = Field(
+        "./data/conclave.db",
+        description="Chemin de la base SQLite durable (crée son dossier).",
+    )
+
+    agent_max_rounds: int = Field(
+        5, ge=1, description="Nombre maximal de tours d'outils par expert (boucle P4)."
+    )
+    expert_max_output_tokens: int = Field(
+        1500,
+        ge=50,
+        description="Budget de sortie des experts/arbitre (JSON structuré volumineux).",
+    )
+    structured_repair_attempts: int = Field(
+        2,
+        ge=1,
+        le=3,
+        description="Nombre maximal de tentatives JSON sans outils après une sortie invalide.",
+    )
+    expert_timeout_seconds: float = Field(
+        90.0,
+        gt=0,
+        description=(
+            "Délai maximal d'un expert (Avocat/Procureur/Comptable), "
+            "incluant les appels d'outils, le streaming et une éventuelle réparation."
+        ),
+    )
+    arbiter_timeout_seconds: float = Field(
+        45.0, gt=0, description="Délai maximal de l'Arbitre, streaming compris."
+    )
+    analysis_timeout_seconds: float = Field(
+        180.0,
+        gt=0,
+        description=(
+            "Délai maximal de l'analyse entière : il doit couvrir les experts "
+            "parallèles puis l'arbitrage."
+        ),
+    )
+
+    sse_poll_interval_ms: int = Field(
+        100,
+        ge=10,
+        le=2000,
+        description="Fréquence de scrutation SQLite de la route SSE, en millisecondes.",
+    )
+    sse_keepalive_seconds: int = Field(
+        10,
+        ge=1,
+        le=300,
+        description="Intervalle du commentaire SSE de garde-fou `: keep-alive`, en secondes.",
+    )
+    stream_max_draft_chars: int = Field(
+        4000,
+        ge=100,
+        le=20000,
+        description="Taille maximale du texte live diffusé (brouillon) par rôle et analyse.",
+    )
+    stream_delta_batch_chars: int = Field(
+        16,
+        ge=4,
+        le=512,
+        description="Taille cible d'un événement agent.response.delta, en caractères.",
+    )
+    max_concurrent_analyses: int = Field(
+        3,
+        ge=1,
+        le=50,
+        description=(
+            "Nombre maximal d'analyses simultanément queued ou running. "
+            "Au-delà, POST /api/analyses répond 429 avec une raison explicite "
+            "plutôt que d'accepter dix soumissions et de saturer le fournisseur."
+        ),
+    )
+    queued_analysis_ttl_seconds: int = Field(
+        300,
+        ge=30,
+        le=86400,
+        description=(
+            "Durée maximale d'une analyse restée queued sans appel /start. "
+            "Elle est ensuite marquée failed lors de la prochaine soumission, "
+            "afin de ne pas occuper éternellement une place de concurrence."
+        ),
+    )
+    stream_flush_interval_ms: int = Field(
+        50,
+        ge=10,
+        le=2000,
+        description=(
+            "Délai maximal avant un flush partiel du brouillon live accumulé, "
+            "pour ne jamais retenir un petit fragment reçu isolément."
+        ),
     )
 
     @field_validator("disabled_tools")

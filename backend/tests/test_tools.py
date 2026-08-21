@@ -130,22 +130,26 @@ class TestEstimateAnalysisCost:
         estimate = tools.estimate_analysis_cost(1, 1, self.PRICING)
         assert round(estimate["estimated_cost_usd"], 6) == estimate["estimated_cost_usd"]
 
-    def test_unknown_model_rejected(self) -> None:
-        with pytest.raises(tools.UnknownPricingError):
-            tools.estimate_analysis_cost(100, 10, {"model_name": "ghost-model"})
+    def test_unknown_model_returns_unpriced_result(self) -> None:
+        estimate = tools.estimate_analysis_cost(100, 10, {"model_name": "ghost-model"})
+        assert estimate["estimated_cost_usd"] is None
+        assert estimate["pricing_configured"] is False
 
-    def test_zero_pricing_rejected(self) -> None:
+    def test_zero_pricing_returns_unpriced_result(self) -> None:
         pricing = {
             "model_name": "MiniMax-M3",
             "input_usd_per_million_tokens": 0.0,
             "output_usd_per_million_tokens": 1.20,
         }
-        with pytest.raises(tools.UnknownPricingError):
-            tools.estimate_analysis_cost(100, 10, pricing)
+        estimate = tools.estimate_analysis_cost(100, 10, pricing)
+        assert estimate["estimated_cost_usd"] is None
+        assert estimate["pricing_configured"] is False
 
-    def test_no_pricing_rejected(self) -> None:
-        with pytest.raises(tools.UnknownPricingError):
-            tools.estimate_analysis_cost(100, 10, {})
+    def test_no_pricing_returns_unpriced_result(self) -> None:
+        estimate = tools.estimate_analysis_cost(100, 10, {})
+        assert estimate["model_name"] == "unknown"
+        assert estimate["estimated_cost_usd"] is None
+        assert estimate["pricing_configured"] is False
 
     def test_negative_tokens_rejected(self) -> None:
         with pytest.raises(ValueError):
