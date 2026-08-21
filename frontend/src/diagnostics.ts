@@ -25,7 +25,8 @@ const EXPLANATIONS: Record<string, Explanation> = {
   },
   expert_timeout: {
     what: "L'expert a dépassé son délai maximal avant de conclure.",
-    action: 'Réessayez, ou augmentez EXPERT_TIMEOUT_SECONDS si le document est long.',
+    action:
+      'Vérifiez le délai côté backend (90 s recommandé), puis augmentez ANALYSIS_TIMEOUT_SECONDS si nécessaire.',
   },
   arbiter_timeout: {
     what: "L'arbitre a dépassé son délai maximal avant de rendre un verdict.",
@@ -37,11 +38,13 @@ const EXPLANATIONS: Record<string, Explanation> = {
   },
   protocol_error: {
     what: "Le modèle n'a pas respecté l'enveloppe de réponse imposée, même après une tentative de correction.",
-    action: 'Relancez : ce défaut est propre à une génération et se reproduit rarement.',
+    action:
+      'Relancez. Si cela se répète, vérifiez le modèle MiniMax configuré, le streaming et le budget EXPERT_MAX_OUTPUT_TOKENS.',
   },
   structured_output_error: {
     what: "Le modèle a répondu, mais sa sortie ne validait pas le schéma exigé — elle a donc été refusée plutôt qu'affichée.",
-    action: 'Relancez l’analyse. Un document très court ou ambigu augmente ce risque.',
+    action:
+      'Relancez avec un budget de sortie suffisant ; pour le Comptable, vérifiez aussi que mesure_current_document puis estimate_current_analysis_cost ont été exécutés.',
   },
   max_rounds_reached: {
     what: "L'agent a atteint la limite de tours d'outils sans jamais conclure.",
@@ -50,6 +53,10 @@ const EXPLANATIONS: Record<string, Explanation> = {
   repeated_tool_call: {
     what: "L'agent a redemandé exactement le même outil : la boucle a été coupée pour éviter un cycle infini.",
     action: 'Relancez l’analyse.',
+  },
+  one_tool_per_round: {
+    what: "L’agent a demandé plusieurs outils dans le même tour. Le garde-fou n’en a exécuté qu’un et lui a demandé de redemander les suivants aux tours suivants.",
+    action: null,
   },
   insufficient_expertise: {
     what: 'Moins de deux experts ont produit une sortie exploitable : aucun verdict ne pouvait être rendu honnêtement.',
@@ -107,14 +114,17 @@ export interface RoundView {
   round: number
   outcome: string | null
   latencyMs: number | null
+  protocolError: string | null
+  finishReason: string | null
 }
 
 const OUTCOME_LABELS: Record<string, string> = {
   tool_calls: 'a demandé un outil',
   final_response: 'a rendu sa réponse finale',
-  protocol_error: 'a violé le protocole de réponse',
+  protocol_error: 'a produit une sortie finale à réparer',
   provider_error: 'a échoué côté fournisseur',
   max_rounds: 'a atteint la limite de tours',
+  missing_required_tools: 'doit encore appeler un outil obligatoire',
 }
 
 export function outcomeLabel(outcome: string | null): string {
@@ -148,7 +158,14 @@ export function collectRounds(events: readonly AnalysisEvent[]): readonly RoundV
       continue
     }
     if (event.type === 'agent.round.started') {
-      views.push({ role, round, outcome: null, latencyMs: null })
+      views.push({
+        role,
+        round,
+        outcome: null,
+        latencyMs: null,
+        protocolError: null,
+        finishReason: null,
+      })
       continue
     }
     const open = views.find((view) => view.role === role && view.round === round)
@@ -156,9 +173,70 @@ export function collectRounds(events: readonly AnalysisEvent[]): readonly RoundV
       open.outcome = typeof event.payload.outcome === 'string' ? event.payload.outcome : null
       open.latencyMs =
         typeof event.payload.latency_ms === 'number' ? event.payload.latency_ms : null
+      open.protocolError =
+        typeof event.payload.protocol_error === 'string'
+          ? event.payload.protocol_error
+          : null
+      open.finishReason =
+        typeof event.payload.finish_reason === 'string'
+          ? event.payload.finish_reason
+          : null
     }
   }
   return views
+}
+
+export interface RepairView {
+  role: AgentRole
+  attempt: number
+  maxAttempts: number
+  status: 'running' | 'completed' | 'failed'
+  reason: string | null
+}
+
+export function collectRepairs(events: readonly AnalysisEvent[]): readonly RepairView[] {
+  const repairs: RepairView[] = []
+  for (const event of events) {
+    if (
+      event.type !== 'agent.repair.started' &&
+      event.type !== 'agent.repair.completed' &&
+      event.type !== 'agent.repair.failed'
+    ) {
+      continue
+    }
+    const role = readRole(event)
+    const attempt = event.payload.attempt
+    const maxAttempts = event.payload.max_attempts
+    if (
+      role === null ||
+      typeof attempt !== 'number' ||
+      typeof maxAttempts !== 'number'
+    ) {
+      continue
+    }
+    const existing = repairs.find(
+      (repair) => repair.role === role && repair.attempt === attempt,
+    )
+    const status =
+      event.type === 'agent.repair.started'
+        ? 'running'
+        : event.type === 'agent.repair.completed'
+          ? 'completed'
+          : 'failed'
+    const reason =
+      typeof event.payload.reason === 'string'
+        ? event.payload.reason
+        : typeof event.payload.error_detail === 'string'
+          ? event.payload.error_detail
+          : null
+    if (existing !== undefined) {
+      existing.status = status
+      existing.reason = reason ?? existing.reason
+    } else {
+      repairs.push({ role, attempt, maxAttempts, status, reason })
+    }
+  }
+  return repairs
 }
 
 export interface FailureView {

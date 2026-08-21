@@ -46,7 +46,8 @@ CostEstimate = {
   model_name: str,
   input_tokens: int,
   output_token_budget: int,
-  estimated_cost_usd: float,   # arrondi à 6 décimales
+  estimated_cost_usd: float | null,   # arrondi à 6 décimales si configuré
+  pricing_configured: bool,
   currency: "USD"
 }
 
@@ -99,9 +100,9 @@ estimate_analysis_cost(
 ```
 
 - **Utilisé par :** adaptateur `estimate_current_analysis_cost()` de la boucle agent ; résultat fourni au Comptable.
-- **But :** fournir une estimation reproductible du coût d'un appel, séparée de l'interprétation LLM. Devise explicite (USD), arrondi documenté à 6 décimales.
+- **But :** fournir une estimation reproductible et conservatrice de l'analyse complète, séparée de l'interprétation LLM. L'adaptateur agrège les budgets des trois experts, de l'Arbitre, des tours configurés et des réparations structurées ; `assumptions` expose ces hypothèses. Devise explicite (USD), arrondi documenté à 6 décimales.
 - **Effet de bord : NON.** Calcul arithmétique local.
-- **Échec défini :** `UnknownPricingError` si le modèle n'a aucun tarif configuré (tarif absent, non numérique, négatif ou à zéro) — le coût reste alors `null` dans `usage`.
+- **Tarifs absents :** renvoie un résultat contrôlé avec `estimated_cost_usd: null` et `pricing_configured: false` ; ce n'est pas une panne d'outil et ne doit jamais devenir `internal_error`.
 - **Tarifs :** `MINIMAX_INPUT_USD_PER_MILLION` / `MINIMAX_OUTPUT_USD_PER_MILLION` dans `.env` ; estiment les tarifs officiels MiniMax-M3 (standard ≤512K : 0,30 / 1,20 USD par million de jetons, promo de lancement, vérifiés le 19/08/2026 via agrégateurs tiers). Estimatifs : les seules valeurs fiables viennent de la facturation réelle MiniMax.
 
 ### 4. `run_expert` (implémenté en Palier 4 — backend/app/experts.py)
@@ -118,7 +119,7 @@ run_expert(
 ```
 
 - **Utilisé par :** les trois experts via la passerelle MiniMax unique et le modèle `MiniMax-M3`.
-- **But :** exécuter la boucle d'outils du rôle puis produire un `AgentOutput` JSON validé par Pydantic (une seule tentative de réparation structurée). Toutes les sorties d'experts et les événements sont persistés en SQLite ; le run est marqué `pending → running → completed|error|timeout`.
+- **But :** exécuter la boucle d'outils du rôle puis produire un `AgentOutput` JSON validé par Pydantic. Une enveloppe finale incomplète est normalisée par une requête JSON dédiée, sans outils, à température zéro, jusqu'à `STRUCTURED_REPAIR_ATTEMPTS` fois. Toutes les sorties d'experts et les événements sont persistés en SQLite ; le run est marqué `pending → running → completed|error|timeout`.
 - **Effet de bord : OUI.** Appel réseau, transmission du document à un tiers, coût API potentiel, écriture SQLite.
 - **Échec défini :** `ProviderError`, `TimeoutError` (code `expert_timeout`), `StructuredOutputError` (code `structured_output_error`) après échec de la réparation ; aucune réponse invalide n'est transmise à l'Arbitre.
 
@@ -158,13 +159,16 @@ La boucle générique `run_agent_loop` (backend/app/agent.py) est partagée : le
 wrapper public `run_agent` (P3) et chaque expert/arbitre (P4) l'utilisent avec
 leur propre prompt système et leur propre plafond de tours.
 
-MiniMax reçoit le prompt système et les trois schémas d'outils (jamais le
-document). Il choisit seul d'appeler un outil (`tool_choice="auto"`) ; le
+MiniMax reçoit le prompt système et uniquement les schémas pertinents pour le
+rôle (jamais le document). Il choisit seul d'appeler un outil
+(`tool_choice="auto"`) ; le
 serveur valide le nom (`unknown_tool` sinon) et les arguments
 (`invalid_arguments` sinon), vérifie l'état SQLite courant (`tool_disabled`
 sinon), exécute l'adaptateur réel, puis renvoie le résultat dans un message
 `role="tool"` avec `tool_call_id`. La boucle fait au plus `AGENT_MAX_ROUNDS`
-tours ; un appel identique répété (`repeated_tool_call`), la limite atteinte
+tours. Un appel identique ayant déjà réussi réutilise son résultat en cache et
+invite le modèle à conclure, sans réexécuter l'outil ; un appel précédemment
+échoué reste retentable après changement du contexte. La limite atteinte
 (`max_rounds_reached`) ou un dépassement de temps (`expert_timeout`,
 `arbiter_timeout`, `analysis_timeout`) arrête proprement l'étape concernée.
 Les experts utilisent la règle **un seul outil par tour** (`one_tool_per_round`) :
@@ -183,8 +187,10 @@ sans JSON) est diffusé par paquets `agent.response.delta` (bornés par
 `STREAM_DELTA_BATCH_CHARS`, flush temporel 0,1 s) et plafonné par
 `STREAM_MAX_DRAFT_CHARS` ; le JSON final (conforme à `AgentOutput`/`ArbiterVerdict`)
 n'est extrait qu'à la clôture du flux et n'apparaît jamais dans un delta. Un
-round d'outil sans balise n'est pas une erreur ; une réponse qui viole le
-protocole d'enveloppe est rejetée en `protocol_error` sans exécuter d'outil.
+round d'outil sans balise n'est pas une erreur ; un texte live accompagné d'un
+appel d'outil laisse l'appel faire foi. Une enveloppe finale incomplète est
+diagnostiquée précisément puis normalisée en JSON sans outils ; elle ne devient
+un échec qu'après épuisement des tentatives bornées.
 Les événements `agent.response.started|delta|completed|failed` sont persistés
 avant diffusion, avec une séquence strictement croissante par rôle.
 
@@ -193,10 +199,10 @@ avant diffusion, avec une séquence strictement croissante par rôle.
 | Composant | Métriques | Indices sécurité | Estimation coût | Appel LLM |
 | --- | :---: | :---: | :---: | :---: |
 | Agent P3 | appel | appel | appel | boucle `tool_calls` |
-| Avocat (P4) | appel | appel | appel | boucle d'outils + `AgentOutput` |
-| Procureur (P4) | appel | appel | appel | boucle d'outils + `AgentOutput` |
+| Avocat (P4) | appel | appel | — | boucle d'outils + `AgentOutput` |
+| Procureur (P4) | appel | appel | — | boucle d'outils + `AgentOutput` |
 | Comptable (P4) | appel | — | appel | boucle d'outils (métriques puis coût) + `AgentOutput` |
-| Arbitre (P4) | appel (optionnel) | — | — | boucle d'outils + `ArbiterVerdict` |
+| Arbitre (P4) | — | — | — | sorties validées + `ArbiterVerdict` |
 
 ## Décision de scope
 

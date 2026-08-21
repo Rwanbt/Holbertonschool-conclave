@@ -75,9 +75,9 @@ Voir OUTILS.md pour les types exacts (`DocumentMetrics`, `SecurityFinding`,
   au modèle mais son exécuteur renvoie `error_code: "tool_disabled"`.
 - **Erreurs d'outil ≠ 500** : chaque erreur d'outil devient une entrée de
   trace `status="error"` présentée au modèle, qui décide de la suite.
-- **Boucle bornée** : `MINIMAX_MAX_TOOL_ROUNDS` appels maximum ; appel
-  identique répété (`repeated_tool_call`) ou limite atteinte
-  (`max_rounds_reached`) arrêtent proprement la boucle.
+- **Boucle bornée** : `MINIMAX_MAX_TOOL_ROUNDS` appels maximum. Un appel
+  identique déjà réussi réutilise son résultat sans réexécution ; seule la
+  limite (`max_rounds_reached`) arrête une répétition persistante.
 
 ## Schéma de la boucle
 
@@ -118,15 +118,15 @@ modification des prompts système, des schémas de sortie ou des garde-fous doit
 AVOCAT :
 Tu es l'expert AVOCAT de l'analyse documentaire CONCLAVE.
 Le document te parvient dans le message utilisateur.
-Tu peux utiliser les outils serveur sans argument (métriques, indices
-de sécurité, coût) pour étayer ton argumentaire.
+Tu peux utiliser les outils serveur sans argument (métriques et indices
+de sécurité) pour étayer ton argumentaire.
 Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les
 tour à tour.
 Rédige une plaidoirie de la solution proposée par le document, en t'appuyant
 sur des faits vérifiables.
 Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement
 avec l'enveloppe suivante :
-<LIVE_RESPONSE> ton raisonnement final de conclusion en francais, bref, lisible,
+<LIVE_RESPONSE> ta conclusion publique en francais, lisible et limitee a 120 mots,
 sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin
 </LIVE_RESPONSE> puis
 <FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema AgentOutput : role, summary,
@@ -137,15 +137,15 @@ Aucun texte hors de ces deux balises.
 PROCUREUR :
 Tu es l'expert PROCUREUR de l'analyse documentaire CONCLAVE.
 Le document te parvient dans le message utilisateur.
-Tu peux utiliser les outils serveur sans argument (métriques, indices
-de sécurité, coût) pour étayer ton réquisitoire.
+Tu peux utiliser les outils serveur sans argument (métriques et indices
+de sécurité) pour étayer ton réquisitoire.
 Un seul outil par tour : si tu as besoin de plusieurs outils, appelle-les
 tour à tour.
 Démontre les risques, faiblesses et objections que le document soulève,
 en t'appuyant sur des faits vérifiables.
 Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement
 avec l'enveloppe suivante :
-<LIVE_RESPONSE> ton raisonnement final de conclusion en francais, bref, lisible,
+<LIVE_RESPONSE> ta conclusion publique en francais, lisible et limitee a 120 mots,
 sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin
 </LIVE_RESPONSE> puis
 <FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema AgentOutput : role, summary,
@@ -160,12 +160,13 @@ Tu dois d'abord observer les métriques du document, puis estimer le coût
 d'une analyse, puis seulement conclure.
 Un seul outil par tour : au premier tour, demande les métriques ; au tour
 suivant, demande l'estimation du coût.
+Dès que ces deux outils ont réussi, conclus sans demander d'autre outil.
 Tu ne produis JAMAIS une conclusion chiffrée sans avoir observé les métriques
 réelles ni une estimation de coût sans données réelles : si ces mesures
 manquent, tu le signales dans summary et findings sans inventer de valeur.
 Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement
 avec l'enveloppe suivante :
-<LIVE_RESPONSE> ton raisonnement final de conclusion en francais, bref, lisible,
+<LIVE_RESPONSE> ta conclusion publique en francais, lisible et limitee a 120 mots,
 sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin
 </LIVE_RESPONSE> puis
 <FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema AgentOutput : role, summary,
@@ -177,12 +178,10 @@ ARBITRE :
 Tu es l'ARBITRE de l'analyse documentaire CONCLAVE.
 Tu reçois le document et les sorties validées des experts (avocat,
 procureur, comptable).
-Tu peux aussi utiliser les outils serveur sans argument si tu dois vérifier
-un chiffre, mais ce n'est pas obligatoire.
 Départage les désaccords, puis rends une décision finale.
 Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement
 avec l'enveloppe suivante :
-<LIVE_RESPONSE> ton raisonnement final de decision en francais, bref, lisible,
+<LIVE_RESPONSE> ta decision publique en francais, lisible et limitee a 120 mots,
 sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin
 </LIVE_RESPONSE> puis
 <FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema ArbiterVerdict : decision
@@ -197,7 +196,7 @@ Aucun texte hors de ces deux balises.
 POST /api/analyses → analysis.created (persisté) → 3 experts en asyncio.gather
    │  chaque expert : boucle générique run_agent_loop (1 outil/tour, bornée)
    │   → outil réel (état SQLite vérifié) → événements tool.* persistés
-   │   → JSON AgentOutput validé (1 réparation structurée max)
+   │   → JSON AgentOutput validé (jusqu'à STRUCTURED_REPAIR_ATTEMPTS réparations)
    ▼
 ≥ 2 sorties valides ? ── non → analysis.failed (insufficient_expertise)
    │ oui
@@ -228,32 +227,40 @@ Arbitre (document + sorties validées + experts absents) → ArbiterVerdict vali
   MiniMax-M3 peut être cumulatif : `normalize_delta` déduplique les fragments
   qui se chevauchent. Le dernier chunk `choices=[]` avec `usage` est conservé ;
   l'usage est agrégé exactement une fois.
-- **Erreurs de protocole** : marqueurs inversés, double section live, JSON final
-  manquant, id/nom d'outil invalide → `protocol_error`, la boucle s'arrête sans
-  exécuter d'outil. Réponse d'outil sans aucune balise : pas une erreur
-  (enveloppe simplement non demandée). Un round live + `tool_calls` mélangés =
-  `hybrid_live_and_tool_calls`.
+- **Erreurs de protocole** : les sous-codes (`missing_final_json`,
+  `missing_final_json_close`, `truncated_output`, etc.), le `finish_reason` et
+  les tailles bornées sont persistés. Une sortie finale incomplète déclenche
+  une normalisation JSON dédiée, non streamée, sans outils, à température zéro
+  et sous `response_format=json_object`. Un texte live accompagnant un
+  `tool_call` est accepté : l'appel d'outil fait foi et la boucle continue.
 - **Garde-fou de temps des deltas** : `_flush_time` force une diffusion après
   50 ms même si le paquet n'est pas plein (réactivité du front, miniMax en
   temps réel).
 
 ## Garde-fous Palier 4
 
-- **Un seul outil par tour** pour les experts et l'Arbitre : si MiniMax demande
+- **Outils limités par rôle** : Avocat et Procureur reçoivent métriques + indices
+  de sécurité ; le Comptable reçoit métriques + coût ; l'Arbitre ne reçoit
+  aucun outil et travaille uniquement sur les sorties validées.
+- **Un seul outil par tour** pour les experts : si MiniMax demande
   plusieurs outils, seul le premier est exécuté, les autres reçoivent
   `one_tool_per_round` (chaque `tool_call_id` est toujours répondu).
 - **Validation structurée** : toute sortie LLM passe par `AgentOutput` ou
   `ArbiterVerdict` (Pydantic) avant stockage, avant l'Arbitre, avant le front.
-  Une seule réparation (message générique, ne nomme jamais d'outil) ; sinon le
+  Jusqu'à `STRUCTURED_REPAIR_ATTEMPTS` réparations via un prompt de
+  normalisation isolé contenant le JSON Schema Pydantic, sans outil ; sinon le
   run passe en `error` (`structured_output_error`).
-- **Comptable sans preuve = refusé** : une conclusion chiffrée sans les métriques
-  et l'estimation de coût réellement exécutées est rejetée par le validateur
-  (contrôle structurel de la trace, message générique sans nommer d'outil).
-- **Garde-fous de temps** : `expert_timeout_seconds` (30), `arbiter_timeout_seconds`
-  (20), `analysis_timeout_seconds` (60). Codes : `expert_timeout`,
+- **Comptable sans preuve = conclusion différée** : si le Comptable tente de
+  conclure avant les métriques et le coût, la boucle lui demande le prochain
+  outil obligatoire manquant ; aucune réparation JSON ne peut fabriquer ces preuves.
+- **Garde-fous de temps** : `expert_timeout_seconds` (90), `arbiter_timeout_seconds`
+  (45), `analysis_timeout_seconds` (180). Codes : `expert_timeout`,
   `arbiter_timeout`, `analysis_timeout`.
-- **Boucle bornée** : `AGENT_MAX_ROUNDS` (5) ; codes `max_rounds_reached` et
-  `repeated_tool_call` arrêtent proprement.
+- **Appel identique récupérable** : le résultat d'un outil déterministe ayant
+  déjà réussi est réutilisé sans nouvelle exécution, puis le modèle est invité
+  à conclure ou à choisir un autre outil. Un échec antérieur reste retentable.
+- **Boucle bornée** : `AGENT_MAX_ROUNDS` (5) reste l'arrêt ultime contre une
+  répétition persistante (`max_rounds_reached`).
 - **Outils désactivés pendant une analyse** : la configuration est figée dans
   `analysis_tool_states` à la création ; un outil désactivé → `tool_disabled`
   (trace + événement `tool.failed`), sans 500.

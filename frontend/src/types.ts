@@ -97,6 +97,7 @@ export interface GuardrailInfo {
   arbiter_timeout_seconds: number
   analysis_timeout_seconds: number
   agent_max_rounds: number
+  structured_repair_attempts: number
   document_max_length: number
   statuses: GuardrailStatuses
 }
@@ -161,6 +162,9 @@ export type AnalysisEventType =
   | 'analysis.started'
   | 'agent.round.started'
   | 'agent.round.completed'
+  | 'agent.repair.started'
+  | 'agent.repair.completed'
+  | 'agent.repair.failed'
   | 'expert.started'
   | 'tool.started'
   | 'tool.completed'
@@ -201,6 +205,7 @@ export type AgentResponseFailedPayload = Record<string, unknown> & {
   analysis_id: string
   role: AgentRole
   error_code: string
+  error_detail?: string
 }
 
 export type LiveResponseStatus = 'idle' | 'streaming' | 'completed' | 'failed'

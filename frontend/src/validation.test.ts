@@ -126,6 +126,7 @@ function snapshotFixture() {
       arbiter_timeout_seconds: 20,
       analysis_timeout_seconds: 60,
       agent_max_rounds: 5,
+      structured_repair_attempts: 2,
       document_max_length: 12000,
       statuses: {
         analysis: ['queued', 'running', 'completed', 'degraded', 'failed', 'interrupted'],

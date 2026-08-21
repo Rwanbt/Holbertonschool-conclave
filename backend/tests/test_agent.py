@@ -152,6 +152,55 @@ class TestRegistry:
 
 
 class TestAgentLoop:
+    def test_premature_final_response_is_rejected_until_required_tool_runs(
+        self, monkeypatch
+    ) -> None:
+        client = _FakeClient(
+            [
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion prématurée."))]),
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_1", "measure_current_document", "{}"
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                ),
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion valide."))]),
+            ]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+        events: list[tuple[str, dict]] = []
+
+        async def round_sink(kind: str, fields: dict) -> None:
+            events.append((kind, dict(fields)))
+
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=4,
+                required_tools_before_final=frozenset(
+                    {"measure_current_document"}
+                ),
+                round_event_sink=round_sink,
+            )
+        )
+
+        assert result.answer == "Conclusion valide."
+        assert result.executed_tools == ["measure_current_document"]
+        completed = [fields for kind, fields in events if kind == "agent.round.completed"]
+        assert completed[0]["outcome"] == "missing_required_tools"
+
     def test_rejected_tool_call_is_sent_to_event_sink(self, monkeypatch) -> None:
         events: list[tuple[str, dict]] = []
 
@@ -349,6 +398,39 @@ class TestAgentLoop:
         assert entry.output_summary["currency"] == "USD"
         assert entry.output_summary["estimated_cost_usd"] >= 0.0
 
+    def test_measure_then_cost_without_pricing_is_controlled(self, monkeypatch) -> None:
+        response = _run(
+            monkeypatch,
+            [
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(
+                        content=None,
+                        tool_calls=[_FakeToolCall("call_1", "measure_current_document", "{}")],
+                    ))]
+                ),
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(
+                        content=None,
+                        tool_calls=[_FakeToolCall("call_2", "estimate_current_analysis_cost", "{}")],
+                    ))]
+                ),
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Tarifs non configurés."))]),
+            ],
+            settings=_settings(
+                minimax_input_usd_per_million=0.0,
+                minimax_output_usd_per_million=0.0,
+            ),
+        )
+        entry = response.trace[1]
+        assert entry.status == "success"
+        assert entry.error_code is None
+        assert entry.output_summary["estimated_cost_usd"] is None
+        assert entry.output_summary["pricing_configured"] is False
+        assumptions = entry.output_summary["assumptions"]
+        assert assumptions["expert_count"] == 3
+        assert assumptions["arbiter_count"] == 1
+        assert assumptions["estimated_llm_calls"] > 1
+
     def test_unknown_tool_is_traced_not_fatal(self, monkeypatch) -> None:
         response = _run(
             monkeypatch,
@@ -487,7 +569,9 @@ class TestAgentLoop:
         assert response.trace[2].error_code == "max_rounds_reached"
         assert "limite d'itérations" in response.answer
 
-    def test_repeated_identical_call_stops(self, monkeypatch) -> None:
+    def test_repeated_successful_call_reuses_cached_result_then_concludes(
+        self, monkeypatch
+    ) -> None:
         responses = [
             _FakeCompletion(
                 [
@@ -513,14 +597,80 @@ class TestAgentLoop:
                     )
                 ]
             ),
+            _FakeCompletion([_FakeChoice(_FakeMessage(content="Fait."))]),
         ]
         response = _run(monkeypatch, responses)
-        assert response.usage.llm_rounds == 2
+        assert response.usage.llm_rounds == 3
         assert len(response.trace) == 2
         assert response.trace[0].status == "success"
-        assert response.trace[1].status == "error"
-        assert response.trace[1].error_code == "repeated_tool_call"
-        assert "ne peux pas vérifier" in response.answer
+        assert response.trace[1].status == "success"
+        assert response.trace[1].error_code is None
+        assert response.trace[1].input_summary["cache_reused"] is True
+        assert response.trace[1].output_summary["cache_reused"] is True
+        assert response.answer == "Fait."
+
+    def test_failed_call_can_be_retried_after_prerequisite_changes(
+        self, monkeypatch
+    ) -> None:
+        responses = [
+            _FakeCompletion(
+                [
+                    _FakeChoice(
+                        _FakeMessage(
+                            tool_calls=[
+                                _FakeToolCall(
+                                    "cost_early",
+                                    "estimate_current_analysis_cost",
+                                    "{}",
+                                )
+                            ]
+                        )
+                    )
+                ]
+            ),
+            _FakeCompletion(
+                [
+                    _FakeChoice(
+                        _FakeMessage(
+                            tool_calls=[
+                                _FakeToolCall(
+                                    "measure", "measure_current_document", "{}"
+                                )
+                            ]
+                        )
+                    )
+                ]
+            ),
+            _FakeCompletion(
+                [
+                    _FakeChoice(
+                        _FakeMessage(
+                            tool_calls=[
+                                _FakeToolCall(
+                                    "cost_retry",
+                                    "estimate_current_analysis_cost",
+                                    "{}",
+                                )
+                            ]
+                        )
+                    )
+                ]
+            ),
+            _FakeCompletion([_FakeChoice(_FakeMessage(content="Coût vérifié."))]),
+        ]
+
+        response = _run(
+            monkeypatch,
+            responses,
+            settings=_settings(minimax_max_tool_rounds=4),
+        )
+
+        assert [entry.error_code for entry in response.trace] == [
+            "missing_prerequisite",
+            None,
+            None,
+        ]
+        assert response.answer == "Coût vérifié."
 
     def test_usage_accumulates_tokens_and_latency(self, monkeypatch) -> None:
         response = _run(

@@ -30,6 +30,20 @@ from .conftest import (
 DOC = "Un document court mais analysable."
 
 
+def test_agent_output_is_bounded_before_validation() -> None:
+    data = json.loads(agent_output_json("avocat"))
+    data["summary"] = "s" * 2000
+    data["findings"][0]["evidence"] = "e" * 1200
+    data["recommendations"] = ["r" * 700] * 5
+
+    output = experts.validate_agent_output("avocat", data)
+
+    assert len(output.summary) == 1200
+    assert len(output.findings[0].evidence) == 800
+    assert len(output.recommendations) == 3
+    assert all(len(value) == 500 for value in output.recommendations)
+
+
 def _settings(tmp_path, **overrides) -> Settings:
     base = {
         "minimax_api_key": "sk-test-not-a-real-key",
@@ -41,6 +55,7 @@ def _settings(tmp_path, **overrides) -> Settings:
         "expert_timeout_seconds": 30.0,
         "arbiter_timeout_seconds": 20.0,
         "analysis_timeout_seconds": 60.0,
+        "structured_repair_attempts": 1,
     }
     base.update(overrides)
     return Settings(**base)
@@ -91,6 +106,55 @@ class TestFullHappyPath:
         assert result.verdict.decision in {"go", "go_with_conditions", "no_go"}
         assert result.usage.input_tokens is not None
         assert result.usage.llm_rounds >= 5  # 3 experts multi-tours + arbitre
+
+    def test_each_role_only_receives_its_relevant_tool_schemas(
+        self, tmp_path, patch_minimax
+    ) -> None:
+        scripts = scripted_experts(
+            comptable_extra=[final_completion(agent_output_json("comptable", score=70))]
+        )
+        scripts.update(scripted_arbiter())
+        client = FakeClient(scripts)
+        patch_minimax(client)
+
+        _run_analysis(tmp_path, _settings(tmp_path), client)
+
+        schemas_by_role: dict[str, set[str]] = {}
+        for kwargs in client.created_kwargs:
+            messages = kwargs.get("messages", [])
+            system = next(
+                (message.get("content", "") for message in messages if message.get("role") == "system"),
+                "",
+            ).upper()
+            role = next(
+                (
+                    candidate
+                    for candidate in ("arbitre", "avocat", "procureur", "comptable")
+                    if candidate.upper() in system
+                ),
+                None,
+            )
+            if role is None or role in schemas_by_role:
+                continue
+            schemas_by_role[role] = {
+                schema["function"]["name"] for schema in kwargs.get("tools", [])
+            }
+
+        assert schemas_by_role == {
+            "avocat": {
+                "measure_current_document",
+                "find_security_indicators_in_current_document",
+            },
+            "procureur": {
+                "measure_current_document",
+                "find_security_indicators_in_current_document",
+            },
+            "comptable": {
+                "measure_current_document",
+                "estimate_current_analysis_cost",
+            },
+            "arbitre": set(),
+        }
 
     def test_events_are_persisted_ordered_and_document_free(self, tmp_path, patch_minimax) -> None:
         scripts = scripted_experts(
@@ -301,26 +365,26 @@ class TestStructuredValidation:
         assert avocat.output is None
         assert avocat.error_code == "structured_output_error"
 
-    def test_comptable_needs_evidence_then_repair(self, tmp_path, patch_minimax) -> None:
-        # Le comptable conclut sans jamais mesurer ni estimer le coût.
+    def test_comptable_cannot_conclude_without_required_tools(self, tmp_path, patch_minimax) -> None:
+        # Le Comptable insiste pour conclure sans jamais mesurer ni estimer :
+        # l'orchestrateur refuse chaque conclusion prématurée jusqu'à la
+        # limite, au lieu de tenter de fabriquer les preuves par réparation.
         scripts = scripted_experts(
             comptable_extra=[final_completion(agent_output_json("comptable", score=70))]
         )
-        scripts["comptable"] = [final_completion(agent_output_json("comptable", score=70))]
+        scripts["comptable"] = [
+            final_completion(agent_output_json("comptable", score=70))
+        ] * 5
         scripts.update(scripted_arbiter())
-        client = FakeClient(
-            scripts,
-            repairs=[final_completion(agent_output_json("comptable", score=70))],
-        )
+        client = FakeClient(scripts)
         patch_minimax(client)
 
         result = _run_analysis(tmp_path, _settings(tmp_path), client)
 
         comptable = [e for e in result.experts if e.role == "comptable"][0]
-        # Le validateur structurel refuse la conclusion sans preuve réelle :
-        # la réparation (même JSON valide) ne peut pas ajouter l'évidence manquante.
         assert comptable.output is None
-        assert comptable.error_code == "structured_output_error"
+        assert comptable.error_code == "max_rounds_reached"
+        assert comptable.executed_tools == []
 
 
 class TestGuardrails:
@@ -360,7 +424,9 @@ class TestGuardrails:
         assert comptable.error_code == "max_rounds_reached"
         assert result.status in {"degraded", "failed"}
 
-    def test_repeated_identical_call_stops(self, tmp_path, patch_minimax) -> None:
+    def test_comptable_recovers_from_repeated_successful_call(
+        self, tmp_path, patch_minimax
+    ) -> None:
         scripts = scripted_experts()
         scripts["comptable"] = [
             FakeCompletion(
@@ -369,6 +435,10 @@ class TestGuardrails:
             FakeCompletion(
                 [FakeChoice(FakeMessage(content=None, tool_calls=[tool_call("measure_current_document", "m2")]))]
             ),
+            FakeCompletion(
+                [FakeChoice(FakeMessage(content=None, tool_calls=[tool_call("estimate_current_analysis_cost", "c1")]))]
+            ),
+            final_completion(agent_output_json("comptable", score=70)),
         ]
         scripts.update(scripted_arbiter())
         client = FakeClient(scripts)
@@ -377,8 +447,14 @@ class TestGuardrails:
         result = _run_analysis(tmp_path, _settings(tmp_path), client)
 
         comptable = [e for e in result.experts if e.role == "comptable"][0]
-        assert comptable.error_code == "repeated_tool_call"
-        assert comptable.executed_tools == ["measure_current_document"]
+        assert comptable.error_code is None
+        assert comptable.output is not None
+        assert comptable.executed_tools == [
+            "measure_current_document",
+            "estimate_current_analysis_cost",
+        ]
+        assert comptable.trace[1].status == "success"
+        assert comptable.trace[1].output_summary["cache_reused"] is True
 
     def test_expert_timeout(self, tmp_path, patch_minimax) -> None:
         settings = _settings(tmp_path, expert_timeout_seconds=0.2)

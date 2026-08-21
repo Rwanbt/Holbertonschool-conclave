@@ -110,11 +110,31 @@ def adapter_estimate_current_analysis_cost(
         "input_usd_per_million_tokens": settings.minimax_input_usd_per_million,
         "output_usd_per_million_tokens": settings.minimax_output_usd_per_million,
     }
-    return tools.estimate_analysis_cost(
-        session.metrics["estimated_input_tokens"],
-        settings.minimax_max_output_tokens,
+    # Estimation conservatrice de l'analyse ENTIÈRE : trois experts puis un
+    # arbitre, chacun pouvant consommer `agent_max_rounds`, plus les
+    # réparations structurées sans outils. L'ancien calcul utilisait le
+    # budget P2 de 300 jetons pour un seul appel et sous-évaluait fortement
+    # une analyse multi-agents réelle.
+    roles = 4
+    normal_calls = roles * settings.agent_max_rounds
+    repair_calls = roles * settings.structured_repair_attempts
+    estimated_calls = normal_calls + repair_calls
+    input_tokens = session.metrics["estimated_input_tokens"] * estimated_calls
+    output_token_budget = settings.expert_max_output_tokens * estimated_calls
+    result = tools.estimate_analysis_cost(
+        input_tokens,
+        output_token_budget,
         pricing,
     )
+    result["assumptions"] = {
+        "expert_count": 3,
+        "arbiter_count": 1,
+        "max_agent_rounds": settings.agent_max_rounds,
+        "structured_repair_attempts": settings.structured_repair_attempts,
+        "estimated_llm_calls": estimated_calls,
+        "expert_output_token_budget_per_call": settings.expert_max_output_tokens,
+    }
+    return result
 
 
 TOOL_EXECUTORS: dict[str, Any] = {
@@ -160,7 +180,7 @@ def output_summary(tool_name: str, result: Any) -> dict[str, Any]:
             "categories": sorted({finding["category"] for finding in result}),
         }
     if tool_name == "estimate_current_analysis_cost":
-        return {
+        summary = {
             key: result[key]
             for key in (
                 "model_name",
@@ -168,8 +188,11 @@ def output_summary(tool_name: str, result: Any) -> dict[str, Any]:
                 "output_token_budget",
                 "estimated_cost_usd",
                 "currency",
+                "pricing_configured",
             )
         }
+        summary["assumptions"] = result.get("assumptions", {})
+        return summary
     return {}
 
 

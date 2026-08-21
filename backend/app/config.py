@@ -64,14 +64,30 @@ class Settings(BaseSettings):
         ge=50,
         description="Budget de sortie des experts/arbitre (JSON structuré volumineux).",
     )
+    structured_repair_attempts: int = Field(
+        2,
+        ge=1,
+        le=3,
+        description="Nombre maximal de tentatives JSON sans outils après une sortie invalide.",
+    )
     expert_timeout_seconds: float = Field(
-        30.0, gt=0, description="Délai maximal d'un expert (Avocat/Procureur/Comptable)."
+        90.0,
+        gt=0,
+        description=(
+            "Délai maximal d'un expert (Avocat/Procureur/Comptable), "
+            "incluant les appels d'outils, le streaming et une éventuelle réparation."
+        ),
     )
     arbiter_timeout_seconds: float = Field(
-        20.0, gt=0, description="Délai maximal de l'Arbitre."
+        45.0, gt=0, description="Délai maximal de l'Arbitre, streaming compris."
     )
     analysis_timeout_seconds: float = Field(
-        60.0, gt=0, description="Délai maximal de l'analyse entière."
+        180.0,
+        gt=0,
+        description=(
+            "Délai maximal de l'analyse entière : il doit couvrir les experts "
+            "parallèles puis l'arbitrage."
+        ),
     )
 
     sse_poll_interval_ms: int = Field(

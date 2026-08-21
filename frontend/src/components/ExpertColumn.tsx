@@ -1,5 +1,6 @@
 import { EXPERT_ROLE_LABELS, EXPERT_STATUS_LABELS } from '../steps'
 import type { ExpertRun, ExpertRole, LiveResponseView } from '../types'
+import { useStreamingScroll } from '../useStreamingScroll'
 
 interface ExpertColumnProps {
   role: ExpertRole
@@ -24,6 +25,7 @@ export function ExpertColumn({ role, run, live }: ExpertColumnProps) {
   const runFailed = (run.status === 'error' || run.status === 'timeout') && output === null
   const awaitingValidation =
     !output && hasDraft && !interrupted && !streaming && run.status !== 'pending'
+  const liveScroll = useStreamingScroll(live.text, streaming)
 
   return (
     <section className={`expert-column expert-column--${role}`} aria-label={EXPERT_ROLE_LABELS[role]}>
@@ -61,6 +63,9 @@ export function ExpertColumn({ role, run, live }: ExpertColumnProps) {
         <div
           className={`live-draft${interrupted ? ' live-draft--failed' : ''}`}
           aria-label={`Brouillon live de ${EXPERT_ROLE_LABELS[role]}`}
+          tabIndex={0}
+          ref={liveScroll.containerRef}
+          onScroll={liveScroll.onScroll}
         >
           <p className="live-draft-text">{live.text}</p>
           {streaming && (
@@ -78,7 +83,11 @@ export function ExpertColumn({ role, run, live }: ExpertColumnProps) {
       )}
 
       {output !== null && (
-        <div className="expert-output">
+        <div
+          className="expert-output"
+          aria-label={`Réponse validée de ${EXPERT_ROLE_LABELS[role]}`}
+          tabIndex={0}
+        >
           <p className="expert-summary">{output.summary}</p>
           <p className="expert-score">
             {output.score_label} — {output.score}/100
