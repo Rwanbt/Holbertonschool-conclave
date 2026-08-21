@@ -7,12 +7,16 @@ Le Palier 3 ajoute la boucle agent (`/api/p3/agent`) : `AgentRequest`,
 `ToolTraceEntry`, `ExecutionUsage` et `AgentResponse`.
 """
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
 MAX_MESSAGE_LENGTH = 12_000
 MAX_DOCUMENT_LENGTH = 12_000
+
+RecommendationText = Annotated[str, Field(min_length=1, max_length=500)]
+VerdictListText = Annotated[str, Field(min_length=1, max_length=500)]
+UnavailableToolText = Annotated[str, Field(min_length=1, max_length=120)]
 
 
 class LLMRequest(BaseModel):
@@ -193,9 +197,9 @@ class StartAnalysisResponse(BaseModel):
 
 
 class Finding(BaseModel):
-    title: str = Field(..., min_length=1, description="Intitulé court du constat.")
-    evidence: str = Field(..., min_length=1, description="Preuve localisée dans le document.")
-    impact: str = Field(..., min_length=1, description="Impact potentiel.")
+    title: str = Field(..., min_length=1, max_length=160, description="Intitulé court du constat.")
+    evidence: str = Field(..., min_length=1, max_length=800, description="Preuve localisée dans le document.")
+    impact: str = Field(..., min_length=1, max_length=600, description="Impact potentiel.")
     priority: Literal["low", "medium", "high"] = Field(
         ..., description="Priorité du constat."
     )
@@ -203,17 +207,17 @@ class Finding(BaseModel):
 
 class AgentOutput(BaseModel):
     role: ExpertRole = Field(..., description="Rôle de l'expert qui a produit la sortie.")
-    summary: str = Field(..., min_length=1, description="Synthèse argumentée.")
+    summary: str = Field(..., min_length=1, max_length=1200, description="Synthèse argumentée.")
     findings: list[Finding] = Field(
         ..., min_length=2, max_length=5, description="De 2 à 5 constats structurés."
     )
-    score_label: str = Field(..., min_length=1, description="Libellé humain de la note.")
+    score_label: str = Field(..., min_length=1, max_length=80, description="Libellé humain de la note.")
     score: int = Field(..., ge=0, le=100, description="Note sur 100.")
-    recommendations: list[str] = Field(
+    recommendations: list[RecommendationText] = Field(
         [], max_length=3, description="Jusqu'à 3 recommandations."
     )
-    unavailable_tools: list[str] = Field(
-        [], description="Outils indisponibles constatés, bornés en taille."
+    unavailable_tools: list[UnavailableToolText] = Field(
+        [], max_length=10, description="Outils indisponibles constatés, bornés en taille."
     )
 
 
@@ -223,16 +227,16 @@ class ArbiterVerdict(BaseModel):
     )
     score: int = Field(..., ge=0, le=100, description="Score global sur 100.")
     main_disagreement: str = Field(
-        ..., min_length=1, description="Désaccord principal entre les experts."
+        ..., min_length=1, max_length=1000, description="Désaccord principal entre les experts."
     )
-    priority_risks: list[str] = Field(
+    priority_risks: list[VerdictListText] = Field(
         [], max_length=3, description="Jusqu'à 3 risques prioritaires."
     )
-    actions: list[str] = Field(
+    actions: list[VerdictListText] = Field(
         [], max_length=3, description="Jusqu'à 3 actions ordonnées."
     )
     accepted_tradeoff: str = Field(
-        ..., min_length=1, description="Compromis accepté."
+        ..., min_length=1, max_length=1000, description="Compromis accepté."
     )
     unavailable_agents: list[ExpertRole] = Field(
         [], description="Experts absents au moment du verdict."
@@ -329,6 +333,9 @@ class AgentResponseFailed(BaseModel):
     role: ResponseRole = Field(..., description="Rôle dont la réponse a échoué.")
     error_code: str = Field(
         ..., min_length=1, description="Code d'échec (protocol_error, structured_output_error…)."
+    )
+    error_detail: str | None = Field(
+        None, max_length=120, description="Sous-cause technique bornée, sans contenu utilisateur."
     )
 
 

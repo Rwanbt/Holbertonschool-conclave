@@ -77,6 +77,8 @@ class AgentLoopResult:
     stop_reason: str | None = None
     executed_tools: list[str] = field(default_factory=list)
     live_text: str = field(default="", repr=False)
+    protocol_error_detail: str | None = None
+    finish_reason: str | None = None
 
 
 ToolEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
@@ -94,13 +96,6 @@ ResponseEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 émis par l'appelant après validation Pydantic du JSON final.
 """
 
-
-_PROTOCOL_REPAIR_HINT: str = (
-    "Ta réponse n'est pas valide : un tour final doit obligatoirement "
-    "contenir <LIVE_RESPONSE>un texte non vide</LIVE_RESPONSE> suivi de "
-    "<FINAL_JSON>{...}</FINAL_JSON>, sans texte hors de ces deux balises. "
-    "Renvoie une réponse corrigée respectant strictement cette enveloppe."
-)
 
 RoundEventSink = Callable[[str, dict[str, Any]], Awaitable[None]]
 """Sink de progression observable : `(kind, fields)` avec kind in
@@ -126,6 +121,7 @@ async def run_agent_loop(
     stream_final_envelope: bool = False,
     allowed_tools: frozenset[str] | None = None,
     round_event_sink: RoundEventSink | None = None,
+    required_tools_before_final: frozenset[str] = frozenset(),
 ) -> AgentLoopResult:
     """Boucle générique bornée. `get_connection` alimente l'état SQLite des outils
     (repli Palier 3 quand `allowed_tools` n'est pas fourni).
@@ -142,9 +138,10 @@ async def run_agent_loop(
     `<LIVE_RESPONSE>…</LIVE_RESPONSE><FINAL_JSON>…</FINAL_JSON>` : le texte live
     est diffusé par `response_event_sink`, le JSON final est extrait dans
     `answer`. Une violation de protocole (JSON seul, live vide, marqueurs
-    invalides) déclenche UNE seule requête MiniMax de réparation, toujours en
-    streaming ; si elle échoue aussi, la boucle s'arrête proprement
-    (`stop_reason="protocol_error"`) sans exécuter d'outil.
+    invalides) est remontée avec son sous-code à l'appelant. La réparation
+    structurée est volontairement faite ensuite, sans outils et sans
+    streaming, par l'expert ou l'arbitre : une réparation ne peut ainsi ni
+    rappeler un outil ni répéter l'enveloppe défectueuse.
     """
     output_budget = max_output_tokens or settings.minimax_max_output_tokens
     executed_calls: set[tuple[str, str]] = set()
@@ -161,6 +158,8 @@ async def run_agent_loop(
     live_text = ""
     stop = False
     stop_reason: str | None = None
+    protocol_error_detail: str | None = None
+    finish_reason: str | None = None
 
     def record_usage(completion: Any) -> None:
         nonlocal any_usage, total_input, total_output, total_tokens
@@ -172,16 +171,23 @@ async def run_agent_loop(
         total_tokens += completion.usage.total_tokens or 0
 
     async def emit_round_completed(
-        round_number: int, outcome: str, latency_ms: int
+        round_number: int,
+        outcome: str,
+        latency_ms: int,
+        **diagnostics: Any,
     ) -> None:
         if round_event_sink is not None:
+            payload = {
+                "round": round_number,
+                "outcome": outcome,
+                "latency_ms": latency_ms,
+            }
+            payload.update(
+                {key: value for key, value in diagnostics.items() if value is not None}
+            )
             await round_event_sink(
                 "agent.round.completed",
-                {
-                    "round": round_number,
-                    "outcome": outcome,
-                    "latency_ms": latency_ms,
-                },
+                payload,
             )
 
     async with build_client(settings) as client:
@@ -239,27 +245,6 @@ async def run_agent_loop(
                 ) from exc
             record_usage(completion)
 
-            if (
-                stream_final_envelope
-                and completion.protocol_error is not None
-            ):
-                try:
-                    completion = await _call(
-                        messages + [{"role": "user", "content": _PROTOCOL_REPAIR_HINT}]
-                    )
-                except LiveSinkError:
-                    raise
-                except Exception as exc:  # noqa: BLE001
-                    round_latency_ms = int((time.monotonic() - started) * 1000)
-                    total_latency_ms += round_latency_ms
-                    await emit_round_completed(
-                        round_number, "provider_error", round_latency_ms
-                    )
-                    raise ProviderError(
-                        f"MiniMax agent repair request failed: {exc.__class__.__name__}"
-                    ) from exc
-                record_usage(completion)
-
             round_latency_ms = int((time.monotonic() - started) * 1000)
             total_latency_ms += round_latency_ms
 
@@ -271,16 +256,56 @@ async def run_agent_loop(
 
             message = completion.choices[0].message
             tool_calls = message.tool_calls or []
+            finish_reason = getattr(completion.choices[0], "finish_reason", None)
 
             if stream_final_envelope:
                 if completion.protocol_error is not None:
                     live_text = completion.live_text or live_text
-                    stop = True
-                    stop_reason = "protocol_error"
-                    await emit_round_completed(
-                        round_number, "protocol_error", round_latency_ms
+                    protocol_error_detail = completion.protocol_error
+                    if tool_calls:
+                        stop = True
+                        stop_reason = "protocol_error"
+                        await emit_round_completed(
+                            round_number,
+                            "protocol_error",
+                            round_latency_ms,
+                            protocol_error=protocol_error_detail,
+                            finish_reason=finish_reason,
+                            content_chars=len(message.content or ""),
+                            live_chars=len(completion.live_text or ""),
+                            final_json_chars=len(completion.final_json or ""),
+                            repair_required=False,
+                        )
+                        break
+                    missing_required_now = (
+                        required_tools_before_final - set(executed_tools)
                     )
-                    break
+                    if missing_required_now:
+                        # La priorité est d'obtenir les preuves obligatoires.
+                        # Le tour sera classé `missing_required_tools` dans la
+                        # branche sans outil ci-dessous, puis la boucle reprend.
+                        final_json = (completion.final_json or "").strip()
+                        if completion.live_text:
+                            live_text = completion.live_text
+                    else:
+                        # Conserve la matière reçue afin que `run_expert` ou
+                        # `run_arbiter` puisse lancer UNE réparation JSON dédiée,
+                        # sans outils. Le brouillon live reste visible mais n'est
+                        # jamais pris pour une sortie validée.
+                        answer = (completion.final_json or message.content or "").strip()
+                        stop_reason = "protocol_error"
+                        await emit_round_completed(
+                            round_number,
+                            "protocol_error",
+                            round_latency_ms,
+                            protocol_error=protocol_error_detail,
+                            finish_reason=finish_reason,
+                            content_chars=len(message.content or ""),
+                            live_chars=len(completion.live_text or ""),
+                            final_json_chars=len(completion.final_json or ""),
+                            repair_required=True,
+                        )
+                        break
                 final_json = (completion.final_json or "").strip()
                 if completion.live_text:
                     live_text = completion.live_text
@@ -288,6 +313,39 @@ async def run_agent_loop(
                 final_json = ""
 
             if not tool_calls:
+                missing_required = sorted(
+                    required_tools_before_final - set(executed_tools)
+                )
+                if missing_required:
+                    await emit_round_completed(
+                        round_number,
+                        "missing_required_tools",
+                        round_latency_ms,
+                        missing_tools=missing_required,
+                        protocol_error=protocol_error_detail,
+                    )
+                    if round_number >= max_rounds:
+                        stop = True
+                        stop_reason = "max_rounds_reached"
+                        break
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": message.content or None,
+                        }
+                    )
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "Ta conclusion est prématurée. Demande maintenant, "
+                                "sans conclure, le prochain outil obligatoire manquant : "
+                                + ", ".join(missing_required)
+                                + ". Un seul outil par tour."
+                            ),
+                        }
+                    )
+                    continue
                 content = (message.content or "").strip()
                 if not content and not final_json:
                     await emit_round_completed(
@@ -558,6 +616,8 @@ async def run_agent_loop(
         stop_reason=stop_reason,
         executed_tools=executed_tools,
         live_text=live_text,
+        protocol_error_detail=protocol_error_detail,
+        finish_reason=finish_reason,
     )
 
 

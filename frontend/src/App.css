@@ -711,6 +711,23 @@
   background-color: var(--surface-subtle);
 }
 
+.expert-column .live-draft,
+.expert-column .expert-output,
+.verdict--live .live-draft {
+  max-height: 90vh;
+  max-height: 90dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.expert-column .live-draft:focus-visible,
+.expert-column .expert-output:focus-visible,
+.verdict--live .live-draft:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .live-draft--failed {
   border-style: solid;
   border-color: var(--danger-fg);

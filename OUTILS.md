@@ -100,7 +100,7 @@ estimate_analysis_cost(
 ```
 
 - **Utilisé par :** adaptateur `estimate_current_analysis_cost()` de la boucle agent ; résultat fourni au Comptable.
-- **But :** fournir une estimation reproductible du coût d'un appel, séparée de l'interprétation LLM. Devise explicite (USD), arrondi documenté à 6 décimales.
+- **But :** fournir une estimation reproductible et conservatrice de l'analyse complète, séparée de l'interprétation LLM. L'adaptateur agrège les budgets des trois experts, de l'Arbitre, des tours configurés et des réparations structurées ; `assumptions` expose ces hypothèses. Devise explicite (USD), arrondi documenté à 6 décimales.
 - **Effet de bord : NON.** Calcul arithmétique local.
 - **Tarifs absents :** renvoie un résultat contrôlé avec `estimated_cost_usd: null` et `pricing_configured: false` ; ce n'est pas une panne d'outil et ne doit jamais devenir `internal_error`.
 - **Tarifs :** `MINIMAX_INPUT_USD_PER_MILLION` / `MINIMAX_OUTPUT_USD_PER_MILLION` dans `.env` ; estiment les tarifs officiels MiniMax-M3 (standard ≤512K : 0,30 / 1,20 USD par million de jetons, promo de lancement, vérifiés le 19/08/2026 via agrégateurs tiers). Estimatifs : les seules valeurs fiables viennent de la facturation réelle MiniMax.
@@ -119,7 +119,7 @@ run_expert(
 ```
 
 - **Utilisé par :** les trois experts via la passerelle MiniMax unique et le modèle `MiniMax-M3`.
-- **But :** exécuter la boucle d'outils du rôle puis produire un `AgentOutput` JSON validé par Pydantic (une seule tentative de réparation structurée). Toutes les sorties d'experts et les événements sont persistés en SQLite ; le run est marqué `pending → running → completed|error|timeout`.
+- **But :** exécuter la boucle d'outils du rôle puis produire un `AgentOutput` JSON validé par Pydantic. Une enveloppe finale incomplète est normalisée par une requête JSON dédiée, sans outils, à température zéro, jusqu'à `STRUCTURED_REPAIR_ATTEMPTS` fois. Toutes les sorties d'experts et les événements sont persistés en SQLite ; le run est marqué `pending → running → completed|error|timeout`.
 - **Effet de bord : OUI.** Appel réseau, transmission du document à un tiers, coût API potentiel, écriture SQLite.
 - **Échec défini :** `ProviderError`, `TimeoutError` (code `expert_timeout`), `StructuredOutputError` (code `structured_output_error`) après échec de la réparation ; aucune réponse invalide n'est transmise à l'Arbitre.
 
@@ -184,8 +184,10 @@ sans JSON) est diffusé par paquets `agent.response.delta` (bornés par
 `STREAM_DELTA_BATCH_CHARS`, flush temporel 0,1 s) et plafonné par
 `STREAM_MAX_DRAFT_CHARS` ; le JSON final (conforme à `AgentOutput`/`ArbiterVerdict`)
 n'est extrait qu'à la clôture du flux et n'apparaît jamais dans un delta. Un
-round d'outil sans balise n'est pas une erreur ; une réponse qui viole le
-protocole d'enveloppe est rejetée en `protocol_error` sans exécuter d'outil.
+round d'outil sans balise n'est pas une erreur ; un texte live accompagné d'un
+appel d'outil laisse l'appel faire foi. Une enveloppe finale incomplète est
+diagnostiquée précisément puis normalisée en JSON sans outils ; elle ne devient
+un échec qu'après épuisement des tentatives bornées.
 Les événements `agent.response.started|delta|completed|failed` sont persistés
 avant diffusion, avec une séquence strictement croissante par rôle.
 

@@ -1,4 +1,5 @@
 import type { LiveResponseView } from '../types'
+import { useStreamingScroll } from '../useStreamingScroll'
 
 interface ArbiterLivePanelProps {
   live: LiveResponseView
@@ -7,6 +8,7 @@ interface ArbiterLivePanelProps {
 export function ArbiterLivePanel({ live }: ArbiterLivePanelProps) {
   const streaming = live.status === 'streaming'
   const interrupted = live.status === 'failed' && live.text.length > 0
+  const liveScroll = useStreamingScroll(live.text, streaming)
 
   return (
     <section className="verdict verdict--live" aria-label="Arbitrage en direct">
@@ -27,6 +29,9 @@ export function ArbiterLivePanel({ live }: ArbiterLivePanelProps) {
         <div
           className={`live-draft${interrupted ? ' live-draft--failed' : ''}`}
           aria-label="Brouillon live du verdict"
+          tabIndex={0}
+          ref={liveScroll.containerRef}
+          onScroll={liveScroll.onScroll}
         >
           <p className="live-draft-text">{live.text}</p>
           {streaming && (

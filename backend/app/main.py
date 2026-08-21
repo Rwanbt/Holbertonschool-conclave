@@ -459,6 +459,7 @@ async def get_analysis_snapshot(
             "arbiter_timeout_seconds": _boot_settings.arbiter_timeout_seconds,
             "analysis_timeout_seconds": _boot_settings.analysis_timeout_seconds,
             "agent_max_rounds": _boot_settings.agent_max_rounds,
+            "structured_repair_attempts": _boot_settings.structured_repair_attempts,
             "document_max_length": 12000,
             "statuses": {
                 "analysis": [

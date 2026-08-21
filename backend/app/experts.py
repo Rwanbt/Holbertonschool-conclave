@@ -59,7 +59,7 @@ _COMPTABLE_REQUIRED_TOOLS: frozenset[str] = frozenset(
 _EXPERT_ENVELOPE: str = (
     "Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement "
     "avec l'enveloppe suivante : "
-    "<LIVE_RESPONSE> ton raisonnement final de conclusion en francais, bref, lisible, "
+    "<LIVE_RESPONSE> ta conclusion publique en francais, lisible et limitee a 120 mots, "
     "sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin "
     "</LIVE_RESPONSE> puis "
     "<FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema AgentOutput : role, summary, "
@@ -114,7 +114,7 @@ SYSTEM_PROMPTS: dict[ExpertRole, str] = {
 _ARBITER_ENVELOPE: str = (
     "Quand tu conclus (sans nouvel appel d'outil a ce tour), reponds obligatoirement "
     "avec l'enveloppe suivante : "
-    "<LIVE_RESPONSE> ton raisonnement final de decision en francais, bref, lisible, "
+    "<LIVE_RESPONSE> ta decision publique en francais, lisible et limitee a 120 mots, "
     "sans JSON, sans chaine de pensee, sans pretendre etre valide avant la fin "
     "</LIVE_RESPONSE> puis "
     "<FINAL_JSON> UNIQUEMENT l'objet JSON conforme au schema ArbiterVerdict : decision "
@@ -160,11 +160,49 @@ _ARBITER_FIELDS = {
 
 def validate_agent_output(role: ExpertRole, data: dict[str, Any]) -> AgentOutput:
     """Valide strictement une sortie d'expert. Lève ValidationError sinon."""
-    return AgentOutput(**{**data, "role": role})
+    bounded = dict(data)
+    for key, limit in (("summary", 1200), ("score_label", 80)):
+        if isinstance(bounded.get(key), str):
+            bounded[key] = bounded[key][:limit]
+    findings = bounded.get("findings")
+    if isinstance(findings, list):
+        normalized_findings: list[Any] = []
+        for finding in findings[:5]:
+            if not isinstance(finding, dict):
+                normalized_findings.append(finding)
+                continue
+            normalized = dict(finding)
+            for key, limit in (("title", 160), ("evidence", 800), ("impact", 600)):
+                if isinstance(normalized.get(key), str):
+                    normalized[key] = normalized[key][:limit]
+            normalized_findings.append(normalized)
+        bounded["findings"] = normalized_findings
+    for key, max_items, max_chars in (
+        ("recommendations", 3, 500),
+        ("unavailable_tools", 10, 120),
+    ):
+        values = bounded.get(key)
+        if isinstance(values, list):
+            bounded[key] = [
+                value[:max_chars] if isinstance(value, str) else value
+                for value in values[:max_items]
+            ]
+    return AgentOutput(**{**bounded, "role": role})
 
 
 def validate_arbiter_verdict(data: dict[str, Any]) -> ArbiterVerdict:
-    return ArbiterVerdict(**data)
+    bounded = dict(data)
+    for key in ("main_disagreement", "accepted_tradeoff"):
+        if isinstance(bounded.get(key), str):
+            bounded[key] = bounded[key][:1000]
+    for key in ("priority_risks", "actions"):
+        values = bounded.get(key)
+        if isinstance(values, list):
+            bounded[key] = [
+                value[:500] if isinstance(value, str) else value
+                for value in values[:3]
+            ]
+    return ArbiterVerdict(**bounded)
 
 
 def _first_findings_without_evidence(data: dict[str, Any]) -> str | None:
@@ -175,23 +213,38 @@ def _first_findings_without_evidence(data: dict[str, Any]) -> str | None:
     return None
 
 
+def _validation_error_detail(exc: ValidationError) -> str:
+    """Résumé borné du schéma, sans valeur produite par le modèle."""
+    parts: list[str] = []
+    for error in exc.errors()[:4]:
+        location = ".".join(str(item) for item in error.get("loc", ())) or "root"
+        parts.append(f"{location}:{error.get('type', 'validation_error')}")
+    return ",".join(parts)[:120]
+
+
 def extract_structured_json(content: str) -> dict[str, Any] | None:
-    """Extrait le premier objet JSON d'un texte (supporte la poésie du modèle)."""
+    """Extrait uniquement un objet JSON explicitement délimité.
+
+    Accepte le JSON seul, un bloc Markdown JSON ou la section FINAL_JSON de
+    l'ancien protocole. Refuse la recherche permissive du « premier objet »
+    dans du texte libre : elle pouvait valider accidentellement un exemple
+    cité par le modèle plutôt que sa sortie finale.
+    """
     content = content.strip()
+    if "<FINAL_JSON>" in content:
+        content = content.split("<FINAL_JSON>", 1)[1]
+        if "</FINAL_JSON>" in content:
+            content = content.split("</FINAL_JSON>", 1)[0]
+        content = content.strip()
+    if content.startswith("```json") and content.endswith("```"):
+        content = content[len("```json") : -len("```")].strip()
+    elif content.startswith("```") and content.endswith("```"):
+        content = content[len("```") : -len("```")].strip()
     try:
         parsed = json.loads(content)
         if isinstance(parsed, dict):
             return parsed
         return None
-    except json.JSONDecodeError:
-        pass
-    start = content.find("{")
-    end = content.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return None
-    try:
-        parsed = json.loads(content[start : end + 1])
-        return parsed if isinstance(parsed, dict) else None
     except json.JSONDecodeError:
         return None
 
@@ -289,28 +342,46 @@ async def _repair_structured_output(
     messages: list[dict[str, Any]],
     settings: Settings,
     error_hint: str,
+    schema: dict[str, Any],
+    schema_name: str,
     max_output_tokens: int | None = None,
 ) -> tuple[str | None, ExecutionUsage]:
     """Une seule tentative de réparation : nouvel appel MiniMax sans outils."""
     output_budget = max_output_tokens or settings.minimax_max_output_tokens
-    messages = messages + [
+    # Le prompt métier initial exige une enveloppe live. Le conserver pendant
+    # une réparation JSON crée deux consignes de format contradictoires. On le
+    # remplace par un normalisateur dédié, tout en gardant le document, les
+    # appels d'outils et leurs résultats comme contexte factuel.
+    context_messages = [message for message in messages if message.get("role") != "system"]
+    repair_messages = [
+        {
+            "role": "system",
+            "content": (
+                "Tu es un normalisateur JSON déterministe. Réponds avec UN objet JSON "
+                "et rien d'autre : aucun Markdown, aucune balise, aucun commentaire. "
+                f"Le nom du contrat est {schema_name}. Respecte exactement ce JSON Schema : "
+                + json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+            ),
+        },
+        *context_messages,
         {
             "role": "user",
             "content": (
                 "Ta réponse n'est pas valide : " + error_hint + ". "
-                "Renvoie UNIQUEMENT le JSON corrigé, conforme au schéma demandé, "
-                "sans texte hors JSON."
+                "Produis maintenant uniquement l'objet JSON corrigé conforme au schéma."
             ),
-        }
+        },
     ]
     started = time.monotonic()
     try:
         completion = await client.chat.completions.create(
             model=settings.minimax_model,
-            messages=messages,
+            messages=repair_messages,
             max_completion_tokens=output_budget,
-            temperature=0.3,
+            temperature=0.0,
             n=1,
+            response_format={"type": "json_object"},
+            extra_body={"thinking": {"type": "disabled"}},
         )
     except Exception as exc:  # noqa: BLE001 - cause fournisseur explicite
         raise ProviderError(
@@ -387,6 +458,7 @@ async def run_expert(
             AgentResponseCompleted(**payload)
         elif kind == "agent.response.failed":
             payload["error_code"] = fields.get("error_code", "protocol_error")
+            payload["error_detail"] = fields.get("error_detail")
             AgentResponseFailed(**payload)
         async with (await get_connection()) as conn:
             await db.insert_analysis_event(conn, analysis_id, kind, payload, now)
@@ -467,6 +539,19 @@ async def run_expert(
         },
     ]
 
+    # Le Comptable ne peut conclure qu'après les outils obligatoires qui sont
+    # réellement activés pour cette analyse. Une conclusion prématurée est
+    # renvoyée dans la boucle agentique afin que le modèle choisisse l'outil
+    # manquant au tour suivant ; elle n'est pas « réparée » en JSON sans preuve.
+    required_comptable_tools = (
+        _COMPTABLE_REQUIRED_TOOLS
+        if allowed_tools is None
+        else (_COMPTABLE_REQUIRED_TOOLS & allowed_tools)
+    )
+    required_tools_before_final = (
+        required_comptable_tools if role == "comptable" else frozenset()
+    )
+
     async def run() -> AgentLoopResult:
         return await run_agent_loop(
             messages,
@@ -482,6 +567,7 @@ async def run_expert(
             stream_final_envelope=True,
             allowed_tools=allowed_tools,
             round_event_sink=round_sink,
+            required_tools_before_final=required_tools_before_final,
         )
 
     async def fail_run(
@@ -490,6 +576,7 @@ async def run_expert(
         *,
         timed_out: bool = False,
         usage: ExecutionUsage | None = None,
+        error_detail: str | None = None,
     ) -> ExpertRunResult:
         """Termine BRUYAMMENT un expert : le run quitte l'état `running` en
         base, l'échec est nommé par son vrai code, et les événements sont
@@ -504,10 +591,16 @@ async def run_expert(
         else:
             await emit(
                 "expert.failed",
-                {"analysis_id": analysis_id, "role": role, "error_code": error_code},
+                {
+                    "analysis_id": analysis_id,
+                    "role": role,
+                    "error_code": error_code,
+                    "error_detail": error_detail,
+                },
             )
         await response_sink(
-            "agent.response.failed", {"role": role, "error_code": error_code}
+            "agent.response.failed",
+            {"role": role, "error_code": error_code, "error_detail": error_detail},
         )
         async with (await get_connection()) as conn:
             await db.upsert_expert_run(
@@ -553,17 +646,12 @@ async def run_expert(
 
     output: AgentOutput | None = None
     error_code: str | None = None
+    error_detail: str | None = loop_result.protocol_error_detail
 
     # Le comptable ne doit une preuve réelle QUE pour les outils réellement
     # disponibles dans la configuration figée de cette analyse : un outil
     # désactivé ne peut pas être exécuté, donc ne peut pas être exigé — le
     # comptable signale alors l'indisponibilité sans inventer de chiffre.
-    required_comptable_tools = (
-        _COMPTABLE_REQUIRED_TOOLS
-        if allowed_tools is None
-        else (_COMPTABLE_REQUIRED_TOOLS & allowed_tools)
-    )
-
     raw = (loop_result.answer or "").strip()
     if not raw:
         error_code = loop_result.stop_reason or "empty_output"
@@ -589,16 +677,73 @@ async def run_expert(
                 output = validate_agent_output(role, data)
             except ValidationError as exc:
                 hint = "erreurs de validation : " + str(exc.errors()[:3])
+                error_detail = error_detail or _validation_error_detail(exc)
         if hint is not None:
+            repair_hint = hint
             try:
                 async with build_client(settings) as client:
-                    repaired, repair_usage = await _repair_structured_output(
-                        client,
-                        messages,
-                        settings,
-                        hint,
-                        max_output_tokens=settings.expert_max_output_tokens,
-                    )
+                    for attempt in range(1, settings.structured_repair_attempts + 1):
+                        await emit(
+                            "agent.repair.started",
+                            {
+                                "analysis_id": analysis_id,
+                                "role": role,
+                                "attempt": attempt,
+                                "max_attempts": settings.structured_repair_attempts,
+                                "reason": error_detail or "schema_validation_error",
+                            },
+                        )
+                        repaired, repair_usage = await _repair_structured_output(
+                            client,
+                            messages,
+                            settings,
+                            repair_hint,
+                            AgentOutput.model_json_schema(),
+                            "AgentOutput",
+                            max_output_tokens=settings.expert_max_output_tokens,
+                        )
+                        run_usage = _merge_usage([run_usage, repair_usage])
+                        repaired_data = (
+                            extract_structured_json(repaired) if repaired else None
+                        )
+                        if repaired_data is None:
+                            repair_hint = "la réparation n'est pas un objet JSON valide"
+                        else:
+                            try:
+                                output = validate_agent_output(role, repaired_data)
+                            except ValidationError as exc:
+                                attempt_error_detail = _validation_error_detail(exc)
+                                repair_hint = (
+                                    "erreurs de validation persistantes : "
+                                    + str(exc.errors()[:3])
+                                )
+                                output = None
+                            else:
+                                attempt_error_detail = None
+                                if role == "comptable" and any(
+                                    tool not in loop_result.executed_tools
+                                    for tool in required_comptable_tools
+                                ):
+                                    output = None
+                                    repair_hint = (
+                                        "les outils obligatoires du Comptable "
+                                        "n'ont pas tous été exécutés"
+                                    )
+                                    attempt_error_detail = "missing_required_tools"
+                        if repaired_data is None:
+                            attempt_error_detail = "invalid_json"
+                        await emit(
+                            "agent.repair.completed" if output is not None else "agent.repair.failed",
+                            {
+                                "analysis_id": analysis_id,
+                                "role": role,
+                                "attempt": attempt,
+                                "max_attempts": settings.structured_repair_attempts,
+                                "error_detail": None if output is not None else attempt_error_detail,
+                            },
+                        )
+                        if output is not None:
+                            break
             except ProviderError:
                 return await fail_run(
                     "error", "provider_unavailable", usage=run_usage
@@ -610,24 +755,9 @@ async def run_expert(
                     analysis_id,
                 )
                 return await fail_run("error", "internal_error", usage=run_usage)
-            run_usage = _merge_usage([run_usage, repair_usage])
-            if repaired:
-                repaired_data = extract_structured_json(repaired)
-                if repaired_data is not None:
-                    try:
-                        output = validate_agent_output(role, repaired_data)
-                    except ValidationError:
-                        output = None
-                    else:
-                        if role == "comptable":
-                            repaired_executed = loop_result.executed_tools
-                            if any(
-                                tool not in repaired_executed
-                                for tool in required_comptable_tools
-                            ):
-                                output = None
             if output is None:
                 error_code = "structured_output_error"
+                error_detail = error_detail or "schema_validation_error"
 
     if output is not None:
         async with (await get_connection()) as conn:
@@ -660,11 +790,17 @@ async def run_expert(
                 completed_at=db.utc_now_iso(),
             )
         await response_sink(
-            "agent.response.failed", {"role": role, "error_code": error_code}
+            "agent.response.failed",
+            {"role": role, "error_code": error_code, "error_detail": error_detail},
         )
         await emit(
             "expert.failed",
-            {"analysis_id": analysis_id, "role": role, "error_code": error_code},
+            {
+                "analysis_id": analysis_id,
+                "role": role,
+                "error_code": error_code,
+                "error_detail": error_detail,
+            },
         )
 
     return ExpertRunResult(
@@ -716,6 +852,7 @@ async def run_arbiter(
             AgentResponseCompleted(**payload)
         elif kind == "agent.response.failed":
             payload["error_code"] = fields.get("error_code", "protocol_error")
+            payload["error_detail"] = fields.get("error_detail")
             AgentResponseFailed(**payload)
         async with (await get_connection()) as conn:
             await db.insert_analysis_event(conn, analysis_id, kind, payload, now)
@@ -814,13 +951,23 @@ async def run_arbiter(
     async def fail_arbiter(
         error_code: str,
         usage: ExecutionUsage | None = None,
+        error_detail: str | None = None,
     ) -> tuple[None, ExecutionUsage, str]:
         await emit(
             "arbiter.failed",
-            {"analysis_id": analysis_id, "error_code": error_code},
+            {
+                "analysis_id": analysis_id,
+                "error_code": error_code,
+                "error_detail": error_detail,
+            },
         )
         await response_sink(
-            "agent.response.failed", {"role": "arbitre", "error_code": error_code}
+            "agent.response.failed",
+            {
+                "role": "arbitre",
+                "error_code": error_code,
+                "error_detail": error_detail,
+            },
         )
         return None, usage or _empty_usage(), error_code
 
@@ -842,6 +989,7 @@ async def run_arbiter(
 
     raw = (loop_result.answer or "").strip()
     verdict: ArbiterVerdict | None = None
+    error_detail: str | None = loop_result.protocol_error_detail
     if raw:
         data = extract_structured_json(raw)
         hint = None
@@ -855,16 +1003,63 @@ async def run_arbiter(
                 verdict = validate_arbiter_verdict(data)
             except ValidationError as exc:
                 hint = "erreurs de validation : " + str(exc.errors()[:3])
+                error_detail = error_detail or _validation_error_detail(exc)
         if hint is not None:
+            repair_hint = hint
             try:
                 async with build_client(settings) as client:
-                    repaired, repair_usage = await _repair_structured_output(
-                        client,
-                        messages,
-                        settings,
-                        hint,
-                        max_output_tokens=settings.expert_max_output_tokens,
-                    )
+                    for attempt in range(1, settings.structured_repair_attempts + 1):
+                        await emit(
+                            "agent.repair.started",
+                            {
+                                "analysis_id": analysis_id,
+                                "role": "arbitre",
+                                "attempt": attempt,
+                                "max_attempts": settings.structured_repair_attempts,
+                                "reason": error_detail or "schema_validation_error",
+                            },
+                        )
+                        repaired, repair_usage = await _repair_structured_output(
+                            client,
+                            messages,
+                            settings,
+                            repair_hint,
+                            ArbiterVerdict.model_json_schema(),
+                            "ArbiterVerdict",
+                            max_output_tokens=settings.expert_max_output_tokens,
+                        )
+                        arbiter_usage = _merge_usage([arbiter_usage, repair_usage])
+                        repaired_data = (
+                            extract_structured_json(repaired) if repaired else None
+                        )
+                        if repaired_data is None:
+                            repair_hint = "la réparation n'est pas un objet JSON valide"
+                        else:
+                            try:
+                                verdict = validate_arbiter_verdict(repaired_data)
+                            except ValidationError as exc:
+                                verdict = None
+                                attempt_error_detail = _validation_error_detail(exc)
+                                repair_hint = (
+                                    "erreurs de validation persistantes : "
+                                    + str(exc.errors()[:3])
+                                )
+                            else:
+                                attempt_error_detail = None
+                        if repaired_data is None:
+                            attempt_error_detail = "invalid_json"
+                        await emit(
+                            "agent.repair.completed" if verdict is not None else "agent.repair.failed",
+                            {
+                                "analysis_id": analysis_id,
+                                "role": "arbitre",
+                                "attempt": attempt,
+                                "max_attempts": settings.structured_repair_attempts,
+                                "error_detail": None if verdict is not None else attempt_error_detail,
+                            },
+                        )
+                        if verdict is not None:
+                            break
             except ProviderError:
                 return await fail_arbiter("provider_unavailable", arbiter_usage)
             except Exception:  # noqa: BLE001 - tracé et nommé
@@ -872,14 +1067,6 @@ async def run_arbiter(
                     "arbiter repair failed internally (analysis %s)", analysis_id
                 )
                 return await fail_arbiter("internal_error", arbiter_usage)
-            arbiter_usage = _merge_usage([arbiter_usage, repair_usage])
-            if repaired:
-                repaired_data = extract_structured_json(repaired)
-                if repaired_data is not None:
-                    try:
-                        verdict = validate_arbiter_verdict(repaired_data)
-                    except ValidationError:
-                        verdict = None
 
     if verdict is not None:
         await response_sink("agent.response.completed", {"role": "arbitre"})
@@ -890,11 +1077,19 @@ async def run_arbiter(
     else:
         await response_sink(
             "agent.response.failed",
-            {"role": "arbitre", "error_code": "structured_output_error"},
+            {
+                "role": "arbitre",
+                "error_code": "structured_output_error",
+                "error_detail": error_detail or "schema_validation_error",
+            },
         )
         await emit(
             "arbiter.failed",
-            {"analysis_id": analysis_id, "error_code": "structured_output_error"},
+            {
+                "analysis_id": analysis_id,
+                "error_code": "structured_output_error",
+                "error_detail": error_detail or "schema_validation_error",
+            },
         )
     return (
         verdict,

@@ -152,6 +152,55 @@ class TestRegistry:
 
 
 class TestAgentLoop:
+    def test_premature_final_response_is_rejected_until_required_tool_runs(
+        self, monkeypatch
+    ) -> None:
+        client = _FakeClient(
+            [
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion prématurée."))]),
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                tool_calls=[
+                                    _FakeToolCall(
+                                        "call_1", "measure_current_document", "{}"
+                                    )
+                                ]
+                            )
+                        )
+                    ]
+                ),
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion valide."))]),
+            ]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+        events: list[tuple[str, dict]] = []
+
+        async def round_sink(kind: str, fields: dict) -> None:
+            events.append((kind, dict(fields)))
+
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=4,
+                required_tools_before_final=frozenset(
+                    {"measure_current_document"}
+                ),
+                round_event_sink=round_sink,
+            )
+        )
+
+        assert result.answer == "Conclusion valide."
+        assert result.executed_tools == ["measure_current_document"]
+        completed = [fields for kind, fields in events if kind == "agent.round.completed"]
+        assert completed[0]["outcome"] == "missing_required_tools"
+
     def test_rejected_tool_call_is_sent_to_event_sink(self, monkeypatch) -> None:
         events: list[tuple[str, dict]] = []
 
@@ -377,6 +426,10 @@ class TestAgentLoop:
         assert entry.error_code is None
         assert entry.output_summary["estimated_cost_usd"] is None
         assert entry.output_summary["pricing_configured"] is False
+        assumptions = entry.output_summary["assumptions"]
+        assert assumptions["expert_count"] == 3
+        assert assumptions["arbiter_count"] == 1
+        assert assumptions["estimated_llm_calls"] > 1
 
     def test_unknown_tool_is_traced_not_fatal(self, monkeypatch) -> None:
         response = _run(

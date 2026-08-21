@@ -34,7 +34,10 @@ from backend.app.streaming import (
 )
 
 from .conftest import (
+    FakeChoice,
     FakeClient,
+    FakeCompletion,
+    FakeMessage,
     FakeStream,
     FakeStreamChunk,
     FakeStreamToolCall,
@@ -56,6 +59,7 @@ def _settings(tmp_path=None, **overrides) -> Settings:
         "expert_timeout_seconds": 30.0,
         "arbiter_timeout_seconds": 20.0,
         "analysis_timeout_seconds": 60.0,
+        "structured_repair_attempts": 1,
     }
     base.update(overrides)
     return Settings(**base)
@@ -232,7 +236,7 @@ class TestStreamCollector:
         assert call.function.name == "measure_current_document"
         assert call.function.arguments == '{"a}'
 
-    def test_hybrid_live_and_tool_calls_is_protocol_error(self) -> None:
+    def test_hybrid_live_and_tool_calls_keeps_the_tool_call(self) -> None:
         collector = StreamCollector(_settings())
         _run_async(collector.feed(FakeStreamChunk(content="<LIVE_RESPONSE>t</LIVE_RESPONSE>")))
         _run_async(
@@ -241,7 +245,25 @@ class TestStreamCollector:
             )
         )
         completion = _run_async(collector.finish())
-        assert completion.protocol_error == "hybrid_live_and_tool_calls"
+        assert completion.protocol_error is None
+        assert completion.choices[0].message.tool_calls is not None
+        assert completion.choices[0].message.tool_calls[0].function.name == "measure_current_document"
+
+    def test_finish_reason_length_is_reported_as_truncation(self) -> None:
+        collector = StreamCollector(_settings())
+        _run_async(
+            collector.feed(
+                FakeStreamChunk(
+                    content=(
+                        "<LIVE_RESPONSE>Conclusion courte</LIVE_RESPONSE>"
+                        "<FINAL_JSON>{\"role\":\"avocat\""
+                    ),
+                    finish_reason="length",
+                )
+            )
+        )
+        completion = _run_async(collector.finish())
+        assert completion.protocol_error == "truncated_output"
 
     def test_live_deltas_bounded_and_started_before_first_delta(self) -> None:
         calls: list[tuple[str, str]] = []
@@ -331,21 +353,15 @@ class TestAgentLoopStreaming:
                 )
             )
 
-    def test_protocol_error_stops_cleanly_without_answer_after_failed_repair(
+    def test_protocol_error_is_deferred_to_structured_repair(
         self, monkeypatch
     ) -> None:
         stream = FakeStream([FakeStreamChunk(content="<LIVE_RESPONSE>texte seul</LIVE_RESPONSE>")])
-        # La réparation unique échoue aussi (toujours pas de FINAL_JSON) :
-        # la boucle s'arrête proprement, sans deuxième tentative.
-        repair_stream = FakeStream(
-            [FakeStreamChunk(content="<LIVE_RESPONSE>encore rien</LIVE_RESPONSE>")]
-        )
-        result, events, client = self._patched_loop(
-            monkeypatch, stream, repairs=[repair_stream]
-        )
+        result, events, client = self._patched_loop(monkeypatch, stream)
         assert result.stop_reason == "protocol_error"
-        assert result.answer is None
-        assert "encore rien" in result.live_text
+        assert result.answer == "<LIVE_RESPONSE>texte seul</LIVE_RESPONSE>"
+        assert result.protocol_error_detail == "missing_final_json"
+        assert "texte seul" in result.live_text
         assert events[0][0] == "agent.response.started"
         assert client._repairs == []
 
@@ -373,6 +389,48 @@ class TestAgentLoopStreaming:
         assert "agent.response.delta" in kinds
         assert len(events) <= 3  # started + 1 delta maximum (conclusion courte)
 
+    def test_hybrid_live_tool_round_executes_tool_then_concludes(self, monkeypatch) -> None:
+        tool_stream = FakeStream(
+            [
+                FakeStreamChunk(
+                    content=(
+                        "<LIVE_RESPONSE>Je commence par mesurer le document.</LIVE_RESPONSE>"
+                    ),
+                    tool_calls=[
+                        FakeStreamToolCall(
+                            0,
+                            call_id="c1",
+                            name="measure_current_document",
+                            arguments="{}",
+                        )
+                    ],
+                    finish_reason="tool_calls",
+                ),
+                FakeStreamChunk(usage=FakeUsage(20, 8)),
+            ]
+        )
+        final_stream = FakeStream(
+            [
+                FakeStreamChunk(
+                    content=(
+                        "<LIVE_RESPONSE>Conclusion courte.</LIVE_RESPONSE>"
+                        "<FINAL_JSON>"
+                        + agent_output_json("avocat")
+                        + "</FINAL_JSON>"
+                    )
+                ),
+                FakeStreamChunk(usage=FakeUsage(30, 12)),
+            ]
+        )
+
+        result, _, _ = self._patched_loop(
+            monkeypatch, [tool_stream, final_stream]
+        )
+
+        assert result.stop_reason is None
+        assert result.executed_tools == ["measure_current_document"]
+        assert json.loads(result.answer)["role"] == "avocat"
+
     def test_final_json_only_round_without_live_triggers_repair_then_succeeds(
         self, monkeypatch
     ) -> None:
@@ -386,26 +444,13 @@ class TestAgentLoopStreaming:
                 FakeStreamChunk(usage=FakeUsage(7, 3)),
             ]
         )
-        repair_stream = FakeStream(
-            [
-                FakeStreamChunk(
-                    content="<LIVE_RESPONSE>Conclusion corrigée</LIVE_RESPONSE>"
-                    "<FINAL_JSON>" + payload + "</FINAL_JSON>"
-                ),
-                FakeStreamChunk(usage=FakeUsage(11, 5)),
-            ]
-        )
-        result, events, client = self._patched_loop(
-            monkeypatch, stream, repairs=[repair_stream]
-        )
-        assert result.stop_reason is None
+        result, events, client = self._patched_loop(monkeypatch, stream)
+        assert result.stop_reason == "protocol_error"
         assert json.loads(result.answer)["role"] == "avocat"
-        assert result.live_text == "Conclusion corrigée"
-        # La tentative invalide a tout de même consommé des jetons : son
-        # usage s'ajoute à celui de la réparation, il ne disparaît pas.
-        assert result.usage.input_tokens == 18
-        assert result.usage.output_tokens == 8
-        assert any(kind == "agent.response.delta" for kind, _ in events)
+        assert result.protocol_error_detail == "missing_live_response"
+        assert result.usage.input_tokens == 7
+        assert result.usage.output_tokens == 3
+        assert not any(kind == "agent.response.delta" for kind, _ in events)
         assert client._repairs == []
 
     def test_streaming_with_all_tools_disabled_omits_tool_parameters(
@@ -455,14 +500,9 @@ class TestAgentLoopStreaming:
         stream = FakeStream(
             [FakeStreamChunk(content="<FINAL_JSON>\n" + payload + "\n</FINAL_JSON>")]
         )
-        repair_stream = FakeStream(
-            [FakeStreamChunk(content="<FINAL_JSON>" + payload + "</FINAL_JSON>")]
-        )
-        result, events, _ = self._patched_loop(
-            monkeypatch, stream, repairs=[repair_stream]
-        )
+        result, events, _ = self._patched_loop(monkeypatch, stream)
         assert result.stop_reason == "protocol_error"
-        assert result.answer is None
+        assert json.loads(result.answer)["role"] == "avocat"
 
 
 class TestResponseEventsPersisted:
@@ -515,10 +555,10 @@ class TestResponseEventsPersisted:
     def test_failed_response_event_when_protocol_error(self, tmp_path, monkeypatch) -> None:
         settings = _settings(tmp_path)
         stream = FakeStream([FakeStreamChunk(content="<LIVE_RESPONSE>texte seul</LIVE_RESPONSE>")])
-        repair_stream = FakeStream(
-            [FakeStreamChunk(content="<LIVE_RESPONSE>toujours rien</LIVE_RESPONSE>")]
+        client = FakeClient(
+            {"avocat": stream},
+            repairs=[FakeCompletion([FakeChoice(FakeMessage(content="toujours invalide"))])],
         )
-        client = FakeClient({"avocat": stream}, repairs=[repair_stream])
         monkeypatch.setattr(experts, "build_client", lambda settings: client)
         monkeypatch.setattr(agent, "build_client", lambda settings: client)
 
@@ -538,7 +578,7 @@ class TestResponseEventsPersisted:
 
         result = _run_async(go())
         assert result.output is None
-        assert result.error_code == "protocol_error"
+        assert result.error_code == "structured_output_error"
 
         async def read():
             async with db.open_connection(settings.database_path) as conn:
@@ -548,19 +588,117 @@ class TestResponseEventsPersisted:
         types = [e["event_type"] for e in events]
         assert "agent.response.failed" in types
         failed = [e for e in events if e["event_type"] == "agent.response.failed"][0]
-        assert json.loads(failed["payload_json"])["error_code"] == "protocol_error"
+        assert json.loads(failed["payload_json"])["error_code"] == "structured_output_error"
+
+    def test_incomplete_stream_is_repaired_as_json_without_tools(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        settings = _settings(tmp_path, structured_repair_attempts=1)
+        stream = FakeStream(
+            [
+                FakeStreamChunk(
+                    content="<LIVE_RESPONSE>Conclusion visible mais JSON absent</LIVE_RESPONSE>",
+                    finish_reason="length",
+                )
+            ]
+        )
+        repair = FakeCompletion(
+            [FakeChoice(FakeMessage(content=agent_output_json("avocat")))],
+            usage=FakeUsage(12, 8),
+        )
+        client = FakeClient({"avocat": stream}, repairs=[repair])
+        monkeypatch.setattr(experts, "build_client", lambda settings: client)
+        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+
+        async def go():
+            await db.initialize(settings.database_path, "")
+            now = db.utc_now_iso()
+            async with db.open_connection(settings.database_path) as conn:
+                await db.create_analysis(conn, "a1", "doc", now)
+            return await experts.run_expert(
+                "avocat",
+                analysis_id="a1",
+                document="doc",
+                session=AgentSession(document="doc"),
+                settings=settings,
+                get_connection=_factory(settings.database_path),
+            )
+
+        result = _run_async(go())
+        assert result.output is not None
+        assert result.error_code is None
+        repair_kwargs = client.created_kwargs[-1]
+        assert repair_kwargs.get("stream") is not True
+        assert "tools" not in repair_kwargs
+        assert "tool_choice" not in repair_kwargs
+        assert repair_kwargs["temperature"] == 0.0
+        assert repair_kwargs["response_format"] == {"type": "json_object"}
+        assert "normalisateur JSON déterministe" in repair_kwargs["messages"][0]["content"]
+        assert "AgentOutput" in repair_kwargs["messages"][0]["content"]
+
+        async def read():
+            async with db.open_connection(settings.database_path) as conn:
+                return await db.list_events_after(conn, "a1")
+
+        types = [event["event_type"] for event in _run_async(read())]
+        assert "agent.repair.started" in types
+        assert "agent.repair.completed" in types
+        assert types[-1] == "expert.completed"
+
+    def test_second_structured_repair_attempt_can_recover(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        settings = _settings(tmp_path, structured_repair_attempts=2)
+        stream = FakeStream(
+            [FakeStreamChunk(content="<LIVE_RESPONSE>Conclusion</LIVE_RESPONSE>")]
+        )
+        client = FakeClient(
+            {"avocat": stream},
+            repairs=[
+                FakeCompletion([FakeChoice(FakeMessage(content="invalide"))]),
+                FakeCompletion(
+                    [FakeChoice(FakeMessage(content=agent_output_json("avocat")))]
+                ),
+            ],
+        )
+        monkeypatch.setattr(experts, "build_client", lambda settings: client)
+        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+
+        async def go():
+            await db.initialize(settings.database_path, "")
+            now = db.utc_now_iso()
+            async with db.open_connection(settings.database_path) as conn:
+                await db.create_analysis(conn, "a1", "doc", now)
+            return await experts.run_expert(
+                "avocat",
+                analysis_id="a1",
+                document="doc",
+                session=AgentSession(document="doc"),
+                settings=settings,
+                get_connection=_factory(settings.database_path),
+            )
+
+        result = _run_async(go())
+        assert result.output is not None
+        repair_calls = [
+            kwargs
+            for kwargs in client.created_kwargs
+            if str(kwargs["messages"][-1].get("content", "")).startswith(
+                "Ta réponse n'est pas valide"
+            )
+        ]
+        assert len(repair_calls) == 2
 
 
 class TestReplayAndToolsList:
     def test_analysis_with_streaming_events_completes(self, tmp_path, monkeypatch) -> None:
-        # Tarifs non nuls requis : sans eux, estimate_current_analysis_cost
-        # échoue (UnknownPricingError) et le comptable ne peut jamais
-        # conclure une preuve chiffrée complète (bug préexistant, hors R1,
-        # révélé ici en fixant les tarifs pour tester le chemin nominal).
+        # Une installation sans tarifs doit rester pleinement fonctionnelle :
+        # l'outil renvoie alors une estimation contrôlée (`None`) au lieu de
+        # transformer l'absence de configuration en panne du Comptable.
         settings = _settings(
             tmp_path,
-            minimax_input_usd_per_million=0.30,
-            minimax_output_usd_per_million=1.20,
+            minimax_input_usd_per_million=0.0,
+            minimax_output_usd_per_million=0.0,
         )
         scripts = {
             "avocat": FakeStream(

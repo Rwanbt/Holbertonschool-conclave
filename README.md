@@ -45,6 +45,12 @@ Pour activer les estimations de coût du Comptable, renseignez aussi
 `MINIMAX_INPUT_USD_PER_MILLION` et `MINIMAX_OUTPUT_USD_PER_MILLION` (0.0 ou
 absent = coût non revendiqué).
 
+L'absence de tarifs ne bloque jamais une analyse : l'outil renvoie alors un
+coût `null` avec `pricing_configured=false`. Quand ils sont présents,
+l'estimation couvre les budgets agrégés des experts, de l'Arbitre, des tours
+et des réparations configurées ; elle reste une borne estimative, pas une
+facture fournisseur.
+
 Options du front, dans `frontend/.env` (facultatif — la valeur par défaut
 suffit au parcours local) :
 
@@ -310,4 +316,4 @@ durée totale.
 | Code 502 | fournisseur MiniMax indisponible | attendre puis réessayer |
 | « Analyse introuvable (404) » | analyse supprimée ou base remise à zéro | la référence locale est nettoyée ; relancer une analyse |
 | Outil inactif dans le panneau | outil désactivé via `/tools` ou `DISABLED_TOOLS` | réactiver via la barre `/tools enable <nom>` ; l'état SQLite fait foi |
-| L’analyse finit en échec avec le Comptable rejeté | tarifs MiniMax absents (0.0) → l’estimation de coût est indisponible | renseigner `MINIMAX_INPUT_USD_PER_MILLION` / `MINIMAX_OUTPUT_USD_PER_MILLION` dans le `.env` racine |
+| Le coût estimé affiche « non configuré » | tarifs MiniMax absents ou à 0.0 | facultatif : renseigner `MINIMAX_INPUT_USD_PER_MILLION` / `MINIMAX_OUTPUT_USD_PER_MILLION` ; l’analyse et le Comptable restent fonctionnels sans tarifs |

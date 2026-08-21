@@ -216,7 +216,7 @@ class EnvelopeParser:
                 if json_idx != -1 and (open_idx == -1 or json_idx < open_idx):
                     close_idx = self._pending.find(LIVE_CLOSE)
                     if close_idx != -1 and close_idx < json_idx:
-                        self._fail("inverted markers: a closing or final marker precedes LIVE_RESPONSE")
+                        self._fail("inverted_markers")
                         return emitted
                     self._pending = self._pending[json_idx + len(JSON_OPEN):]
                     self._saw_marker = True
@@ -227,7 +227,7 @@ class EnvelopeParser:
                     if (close_idx != -1 and close_idx < open_idx) or (
                         json_idx != -1 and json_idx < open_idx
                     ):
-                        self._fail("inverted markers: a closing or final marker precedes LIVE_RESPONSE")
+                        self._fail("inverted_markers")
                         return emitted
                     self._pending = self._pending[open_idx + len(LIVE_OPEN):]
                     self._saw_marker = True
@@ -235,7 +235,7 @@ class EnvelopeParser:
                     self._state = "inside_live"
                     continue
                 if LIVE_CLOSE in self._pending or JSON_OPEN in self._pending:
-                    self._fail("inverted markers")
+                    self._fail("inverted_markers")
                     return emitted
                 self._pending = self._pending[-(len(LIVE_OPEN) - 1):]
                 return emitted
@@ -244,14 +244,14 @@ class EnvelopeParser:
                 close_idx = self._pending.find(LIVE_CLOSE)
                 if close_idx != -1:
                     if LIVE_OPEN in self._pending[:close_idx]:
-                        self._fail("double live section")
+                        self._fail("duplicate_live_section")
                         return emitted
                     emitted += self._emit_live(self._pending[:close_idx])
                     self._pending = self._pending[close_idx + len(LIVE_CLOSE):]
                     self._state = "await_final_marker"
                     continue
                 if LIVE_OPEN in self._pending[: -len(LIVE_CLOSE) + 1]:
-                    self._fail("double live section")
+                    self._fail("duplicate_live_section")
                     return emitted
                 emitted += self._emit_live(self._pending[: -len(LIVE_CLOSE) + 1])
                 self._pending = self._pending[-len(LIVE_CLOSE) + 1:]
@@ -260,12 +260,12 @@ class EnvelopeParser:
             if self._state == "await_final_marker":
                 stripped = self._pending.lstrip()
                 if LIVE_OPEN in stripped or LIVE_CLOSE in stripped:
-                    self._fail("double live section or inverted markers")
+                    self._fail("duplicate_or_inverted_live_section")
                     return emitted
                 open_idx = stripped.find(JSON_OPEN)
                 if open_idx != -1:
                     if JSON_CLOSE in stripped[:open_idx]:
-                        self._fail("inverted markers: closing final json before opening")
+                        self._fail("inverted_final_json_markers")
                         return emitted
                     self._pending = stripped[open_idx + len(JSON_OPEN):]
                     self._saw_marker = True
@@ -281,14 +281,14 @@ class EnvelopeParser:
                 close_idx = self._pending.find(JSON_CLOSE)
                 if close_idx != -1:
                     if JSON_OPEN in self._pending[:close_idx]:
-                        self._fail("double final json section")
+                        self._fail("duplicate_final_json_section")
                         return emitted
                     self._final_json = (self._final_json or "") + self._pending[:close_idx]
                     self._pending = ""
                     self._state = "done"
                     continue
                 if JSON_OPEN in self._pending[: -len(JSON_CLOSE) + 1]:
-                    self._fail("double final json section")
+                    self._fail("duplicate_final_json_section")
                     return emitted
                 self._final_json = (self._final_json or "") + self._pending[: -len(JSON_CLOSE) + 1]
                 self._pending = self._pending[-len(JSON_CLOSE) + 1:]
@@ -306,10 +306,10 @@ class EnvelopeParser:
         live (une réponse JSON-only ne peut plus réussir silencieusement)."""
         if self._state == "done":
             if not self._live_started:
-                self._fail("missing LIVE_RESPONSE section")
+                self._fail("missing_live_response")
                 return self._error
             if not self._live_text.strip():
-                self._fail("empty live response section")
+                self._fail("empty_live_response")
                 return self._error
             return None
         if self._state == "error":
@@ -317,9 +317,9 @@ class EnvelopeParser:
         if not self._saw_marker:
             return None
         if self._state == "inside_live" or self._state == "await_final_marker":
-            self._fail("missing final JSON section")
+            self._fail("missing_final_json")
         elif self._state == "inside_final_json":
-            self._fail("missing closing marker </FINAL_JSON>")
+            self._fail("missing_final_json_close")
         return self._error
 
 
@@ -492,9 +492,15 @@ class StreamCollector:
         parser_error = self._parser.finish()
         self.final_json = self._parser.final_json
         await self._flush()
-        if self._tool_calls and self.live_text:
-            self.protocol_error = "hybrid_live_and_tool_calls"
-        elif parser_error:
+        # MiniMax-M3 peut accompagner un appel d'outil d'un texte public
+        # balisé. Ce texte n'est pas une conclusion : la présence de
+        # `tool_calls` fait foi et la boucle doit exécuter l'outil, puis
+        # poursuivre au tour suivant. Rejeter cette réponse hybride bloquait
+        # notamment le Comptable avant même sa mesure du document.
+        # Les erreurs d'enveloppe ne concernent donc que les tours SANS outil.
+        if not self._tool_calls and self.finish_reason == "length":
+            self.protocol_error = "truncated_output"
+        elif not self._tool_calls and parser_error:
             self.protocol_error = parser_error
         if self._tool_calls and self.protocol_error is None:
             for index in self._tool_order:

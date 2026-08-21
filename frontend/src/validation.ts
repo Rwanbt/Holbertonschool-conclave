@@ -280,6 +280,9 @@ export const SSE_EVENT_TYPES: readonly AnalysisEventType[] = [
   'analysis.started',
   'agent.round.started',
   'agent.round.completed',
+  'agent.repair.started',
+  'agent.repair.completed',
+  'agent.repair.failed',
   'expert.started',
   'tool.started',
   'tool.completed',
@@ -499,6 +502,13 @@ function parseGuardrails(value: unknown): GuardrailInfo {
     record.agent_max_rounds,
     'agent_max_rounds',
   )
+  const structured_repair_attempts =
+    record.structured_repair_attempts === undefined
+      ? 1
+      : readNonNegativeInteger(
+          record.structured_repair_attempts,
+          'structured_repair_attempts',
+        )
   const document_max_length = readNonNegativeInteger(
     record.document_max_length,
     'document_max_length',
@@ -519,6 +529,7 @@ function parseGuardrails(value: unknown): GuardrailInfo {
     arbiter_timeout_seconds,
     analysis_timeout_seconds,
     agent_max_rounds,
+    structured_repair_attempts,
     document_max_length,
     statuses: {
       analysis: analysis as AnalysisStatus[],
@@ -776,7 +787,11 @@ export function parseAgentResponseFailedPayload(
     RESPONSE_ROLES,
   )
   const error_code = readNonEmptyString(record, 'error_code')
-  return { analysis_id, role, error_code }
+  const error_detail =
+    typeof record.error_detail === 'string' && record.error_detail.length > 0
+      ? record.error_detail
+      : undefined
+  return { analysis_id, role, error_code, error_detail }
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {

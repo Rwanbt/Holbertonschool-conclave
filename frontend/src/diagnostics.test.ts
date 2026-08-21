@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   collectFailures,
+  collectRepairs,
   collectRounds,
   explainErrorCode,
   outcomeLabel,
@@ -38,6 +39,7 @@ function snapshot(overrides: Partial<AnalysisSnapshot> = {}): AnalysisSnapshot {
       arbiter_timeout_seconds: 20,
       analysis_timeout_seconds: 60,
       agent_max_rounds: 5,
+      structured_repair_attempts: 2,
       document_max_length: 12000,
       statuses: {
         analysis: ['queued', 'running', 'completed', 'degraded', 'failed', 'interrupted'],
@@ -60,6 +62,14 @@ describe('explainErrorCode', () => {
   it('rend un code inconnu tel quel plutôt que de prétendre l’avoir compris', () => {
     const explanation = explainErrorCode('code_jamais_vu')
     expect(explanation.what).toContain('code_jamais_vu')
+    expect(explanation.action).toBeNull()
+  })
+
+  it('explique le garde-fou limitant les outils à un appel par tour', () => {
+    const explanation = explainErrorCode('one_tool_per_round')
+    expect(explanation.what).toContain('plusieurs outils')
+    expect(explanation.what).toContain('tours suivants')
+    expect(explanation.what).not.toContain('non répertorié')
     expect(explanation.action).toBeNull()
   })
 })
@@ -132,6 +142,38 @@ describe('collectRounds', () => {
     expect(rounds[1]).toMatchObject({ round: 2, outcome: null, latencyMs: null })
     expect(outcomeLabel(rounds[1].outcome)).toBe('en cours')
     expect(outcomeLabel('tool_calls')).toContain('outil')
+  })
+})
+
+describe('collectRepairs', () => {
+  it('fusionne le démarrage et la fin d’une même tentative', () => {
+    const repairs = collectRepairs([
+      event({
+        id: 1,
+        type: 'agent.repair.started',
+        payload: {
+          role: 'avocat',
+          attempt: 1,
+          max_attempts: 2,
+          reason: 'missing_final_json_close',
+        },
+      }),
+      event({
+        id: 2,
+        type: 'agent.repair.completed',
+        payload: { role: 'avocat', attempt: 1, max_attempts: 2 },
+      }),
+    ])
+
+    expect(repairs).toEqual([
+      {
+        role: 'avocat',
+        attempt: 1,
+        maxAttempts: 2,
+        status: 'completed',
+        reason: 'missing_final_json_close',
+      },
+    ])
   })
 })
 

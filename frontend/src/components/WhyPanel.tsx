@@ -1,5 +1,6 @@
 import {
   collectFailures,
+  collectRepairs,
   collectRounds,
   outcomeLabel,
   signalLabel,
@@ -27,6 +28,7 @@ export function WhyPanel({ snapshot, events }: WhyPanelProps) {
   const rounds = collectRounds(events)
   const toolCalls = collectToolCalls(events)
   const failures = collectFailures(snapshot, events)
+  const repairs = collectRepairs(events)
   const security = snapshot?.security ?? null
   const config = snapshot?.tool_configuration ?? null
 
@@ -112,6 +114,36 @@ export function WhyPanel({ snapshot, events }: WhyPanelProps) {
                 {round.latencyMs !== null && (
                   <span className="why-round-latency">{round.latencyMs} ms</span>
                 )}
+                {round.protocolError !== null && (
+                  <code className="why-code">{round.protocolError}</code>
+                )}
+                {round.finishReason !== null && (
+                  <span className="debug-sub">fin : {round.finishReason}</span>
+                )}
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+
+      {repairs.length > 0 && (
+        <div className="why-block">
+          <h3>Réparations structurées</h3>
+          <ol className="why-rounds">
+            {repairs.map((repair) => (
+              <li key={`${repair.role}-${repair.attempt}`} className="why-round">
+                <span className="why-round-role">{roleLabel(repair.role)}</span>
+                <span className="why-round-index">
+                  tentative {repair.attempt}/{repair.maxAttempts}
+                </span>
+                <span className="why-round-outcome">
+                  {repair.status === 'running'
+                    ? 'en cours'
+                    : repair.status === 'completed'
+                      ? 'JSON validé'
+                      : 'sortie encore invalide'}
+                </span>
+                {repair.reason !== null && <code className="why-code">{repair.reason}</code>}
               </li>
             ))}
           </ol>

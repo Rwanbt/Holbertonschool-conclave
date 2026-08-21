@@ -30,6 +30,20 @@ from .conftest import (
 DOC = "Un document court mais analysable."
 
 
+def test_agent_output_is_bounded_before_validation() -> None:
+    data = json.loads(agent_output_json("avocat"))
+    data["summary"] = "s" * 2000
+    data["findings"][0]["evidence"] = "e" * 1200
+    data["recommendations"] = ["r" * 700] * 5
+
+    output = experts.validate_agent_output("avocat", data)
+
+    assert len(output.summary) == 1200
+    assert len(output.findings[0].evidence) == 800
+    assert len(output.recommendations) == 3
+    assert all(len(value) == 500 for value in output.recommendations)
+
+
 def _settings(tmp_path, **overrides) -> Settings:
     base = {
         "minimax_api_key": "sk-test-not-a-real-key",
@@ -41,6 +55,7 @@ def _settings(tmp_path, **overrides) -> Settings:
         "expert_timeout_seconds": 30.0,
         "arbiter_timeout_seconds": 20.0,
         "analysis_timeout_seconds": 60.0,
+        "structured_repair_attempts": 1,
     }
     base.update(overrides)
     return Settings(**base)
@@ -301,26 +316,26 @@ class TestStructuredValidation:
         assert avocat.output is None
         assert avocat.error_code == "structured_output_error"
 
-    def test_comptable_needs_evidence_then_repair(self, tmp_path, patch_minimax) -> None:
-        # Le comptable conclut sans jamais mesurer ni estimer le coût.
+    def test_comptable_cannot_conclude_without_required_tools(self, tmp_path, patch_minimax) -> None:
+        # Le Comptable insiste pour conclure sans jamais mesurer ni estimer :
+        # l'orchestrateur refuse chaque conclusion prématurée jusqu'à la
+        # limite, au lieu de tenter de fabriquer les preuves par réparation.
         scripts = scripted_experts(
             comptable_extra=[final_completion(agent_output_json("comptable", score=70))]
         )
-        scripts["comptable"] = [final_completion(agent_output_json("comptable", score=70))]
+        scripts["comptable"] = [
+            final_completion(agent_output_json("comptable", score=70))
+        ] * 5
         scripts.update(scripted_arbiter())
-        client = FakeClient(
-            scripts,
-            repairs=[final_completion(agent_output_json("comptable", score=70))],
-        )
+        client = FakeClient(scripts)
         patch_minimax(client)
 
         result = _run_analysis(tmp_path, _settings(tmp_path), client)
 
         comptable = [e for e in result.experts if e.role == "comptable"][0]
-        # Le validateur structurel refuse la conclusion sans preuve réelle :
-        # la réparation (même JSON valide) ne peut pas ajouter l'évidence manquante.
         assert comptable.output is None
-        assert comptable.error_code == "structured_output_error"
+        assert comptable.error_code == "max_rounds_reached"
+        assert comptable.executed_tools == []
 
 
 class TestGuardrails:
