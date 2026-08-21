@@ -29,6 +29,7 @@ Contrats respectés :
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -347,12 +348,15 @@ class StreamCollector:
         self._parser = EnvelopeParser(max_live_chars=settings.stream_max_draft_chars)
         self._live_buffer = ""
         self._last_flush = time.monotonic()
+        self._flush_task: asyncio.Task[None] | None = None
+        self._flush_task_error: BaseException | None = None
         self._started = False
         self.protocol_error: str | None = None
         self.final_json: str | None = None
         self.live_text = ""
 
     async def feed(self, chunk: Any) -> None:
+        self._raise_flush_task_error()
         if getattr(chunk, "choices", None):
             choice = chunk.choices[0]
             delta = getattr(choice, "delta", None)
@@ -367,6 +371,7 @@ class StreamCollector:
                         self.live_text += emitted
                         self._live_buffer += emitted
                         await self._flush_size()
+                        self._schedule_time_flush()
             reason = getattr(choice, "finish_reason", None)
             if reason:
                 self.finish_reason = reason
@@ -380,6 +385,36 @@ class StreamCollector:
                 total_tokens=getattr(usage, "total_tokens", None),
             )
         await self._flush_time()
+
+    def _raise_flush_task_error(self) -> None:
+        if self._flush_task_error is not None:
+            error = self._flush_task_error
+            self._flush_task_error = None
+            raise error
+
+    def _schedule_time_flush(self) -> None:
+        if not self._live_buffer or self._flush_task is not None:
+            return
+        interval = self._settings.stream_flush_interval_ms / 1000.0
+        self._flush_task = asyncio.create_task(self._delayed_flush(interval))
+
+    async def _delayed_flush(self, interval: float) -> None:
+        try:
+            await asyncio.sleep(interval)
+            if self._live_buffer:
+                await self._flush()
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # noqa: BLE001 - re-raised by feed/finish
+            self._flush_task_error = exc
+        finally:
+            self._flush_task = None
+
+    def _cancel_flush_task(self) -> None:
+        task = self._flush_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
+        self._flush_task = None
 
     def _feed_tool_call(self, tool_call: Any) -> None:
         index = getattr(tool_call, "index", None)
@@ -429,6 +464,7 @@ class StreamCollector:
             await self._flush()
 
     async def _flush(self) -> None:
+        self._cancel_flush_task()
         if not self._live_buffer:
             self._last_flush = time.monotonic()
             return
@@ -451,6 +487,8 @@ class StreamCollector:
             )
 
     async def finish(self) -> StreamedCompletion:
+        self._raise_flush_task_error()
+        self._cancel_flush_task()
         parser_error = self._parser.finish()
         self.final_json = self._parser.final_json
         await self._flush()

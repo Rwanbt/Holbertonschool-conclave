@@ -104,6 +104,8 @@ Le backend transmet à MiniMax les **deltas réels** de la réponse via des
   croissante par rôle, `delta` borné par `STREAM_DELTA_BATCH_CHARS`) ;
 - `agent.response.completed` — la réponse du rôle est terminée ;
 - `agent.response.failed` — la réponse s’est arrêtée (ex. erreur de protocole).
+- `analysis.started`, `agent.round.started` et `agent.round.completed` — le
+  démarrage et la progression bornée de chaque tour sont persistés.
 
 Le front reconstruit par rôle (`collectLiveResponses`) un **brouillon live** :
 les deltas sont concaténés dans l’ordre des séquences, une séquence dupliquée
@@ -259,7 +261,7 @@ npm run build
 Depuis la racine :
 
 ```bash
-python -m pytest backend/tests -q   # 132 tests + 1 smoke MiniMax réel (skip sans clé)
+python -m pytest backend/tests -q   # 157 tests + 1 smoke MiniMax réel (skip sans clé)
 git status --short
 git diff --check
 ```

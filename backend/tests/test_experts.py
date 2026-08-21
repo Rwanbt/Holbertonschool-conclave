@@ -128,6 +128,41 @@ class TestFullHappyPath:
 
 
 class TestArbiterAndDegradation:
+    def test_escaped_expert_exception_is_persisted_and_degrades(self, tmp_path, patch_minimax, monkeypatch) -> None:
+        scripts = scripted_experts()
+        scripts.update(scripted_arbiter())
+        client = FakeClient(scripts)
+        patch_minimax(client)
+        original_run_expert = experts.run_expert
+
+        async def escaped(role, **kwargs):
+            if role == "procureur":
+                raise RuntimeError("unexpected expert failure")
+            return await original_run_expert(role, **kwargs)
+
+        monkeypatch.setattr(experts, "run_expert", escaped)
+        result = _run_analysis(tmp_path, _settings(tmp_path), client)
+
+        assert result.status == "degraded"
+        assert result.verdict is not None
+
+        async def read():
+            async with db.open_connection(_settings(tmp_path).database_path) as conn:
+                return (
+                    await db.list_expert_runs(conn, "a1"),
+                    await db.list_events_after(conn, "a1"),
+                )
+
+        runs, events = asyncio.run(read())
+        escaped_runs = [run for run in runs if run["role"] == "procureur"]
+        assert escaped_runs[0]["status"] == "error"
+        assert escaped_runs[0]["error_code"] == "internal_error"
+        assert any(
+            event["event_type"] == "expert.failed"
+            and '"error_code": "internal_error"' in event["payload_json"]
+            for event in events
+        )
+
     def test_degraded_when_one_expert_missing(self, tmp_path, patch_minimax) -> None:
         scripts = scripted_experts(
             comptable_extra=[final_completion(agent_output_json("comptable", score=70))]

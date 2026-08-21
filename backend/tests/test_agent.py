@@ -152,6 +152,41 @@ class TestRegistry:
 
 
 class TestAgentLoop:
+    def test_rejected_tool_call_is_sent_to_event_sink(self, monkeypatch) -> None:
+        events: list[tuple[str, dict]] = []
+
+        async def sink(kind: str, fields: dict) -> None:
+            events.append((kind, fields))
+
+        client = _FakeClient(
+            [
+                _FakeCompletion(
+                    [_FakeChoice(_FakeMessage(
+                        content=None,
+                        tool_calls=[_FakeToolCall("call_1", "measure_current_document", "not-json")],
+                    ))]
+                ),
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Refus."))]),
+            ]
+        )
+        monkeypatch.setattr(agent, "build_client", lambda s: client)
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse le document."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=3,
+                tool_event_sink=sink,
+            )
+        )
+
+        assert result.trace[0].error_code == "invalid_arguments"
+        assert events[0][0] == "tool.failed"
+        assert events[0][1]["error_code"] == "invalid_arguments"
+
     def test_simple_request_without_tools(self, monkeypatch) -> None:
         response = _run(
             monkeypatch,

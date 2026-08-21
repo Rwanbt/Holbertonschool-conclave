@@ -219,7 +219,7 @@ Arbitre (document + sorties validées + experts absents) → ArbiterVerdict vali
   `_EXPERT_ENVELOPE` / `_ARBITER_ENVELOPE` dans `backend/app/experts.py`).
 - **Diffusion en direct** : 4 événements persistés `agent.response.started`,
   `agent.response.delta` (charges de `STREAM_DELTA_BATCH_CHARS` caractères,
-  32 par défaut), `agent.response.completed` (JSON validé Pydantic) et
+  16 par défaut), `agent.response.completed` (JSON validé Pydantic) et
   `agent.response.failed`. Séquence strictement croissante par rôle ; un seul
   `started` par rôle et par analyse ; le JSON final n'apparaît jamais dans un
   delta. `completed` est diffusé avant `expert.completed`/`arbiter.completed`.
@@ -234,7 +234,7 @@ Arbitre (document + sorties validées + experts absents) → ArbiterVerdict vali
   (enveloppe simplement non demandée). Un round live + `tool_calls` mélangés =
   `hybrid_live_and_tool_calls`.
 - **Garde-fou de temps des deltas** : `_flush_time` force une diffusion après
-  0,1 s même si le paquet n'est pas plein (réactivité du front, miniMax en
+  50 ms même si le paquet n'est pas plein (réactivité du front, miniMax en
   temps réel).
 
 ## Garde-fous Palier 4
@@ -254,9 +254,9 @@ Arbitre (document + sorties validées + experts absents) → ArbiterVerdict vali
   `arbiter_timeout`, `analysis_timeout`.
 - **Boucle bornée** : `AGENT_MAX_ROUNDS` (5) ; codes `max_rounds_reached` et
   `repeated_tool_call` arrêtent proprement.
-- **Outils désactivés pendant une analyse** : état lu depuis `tool_states`
-  (SQLite) à chaque exécution ; un outil désactivé → `tool_disabled` (trace +
-  événement `tool.failed`), sans 500.
+- **Outils désactivés pendant une analyse** : la configuration est figée dans
+  `analysis_tool_states` à la création ; un outil désactivé → `tool_disabled`
+  (trace + événement `tool.failed`), sans 500.
 - **Document jamais journalisé** : les événements SSE et les traces ne
   contiennent que des résumés bornés ; le document ne va à MiniMax que dans le
   message des rôles experts/arbitre.
@@ -273,7 +273,8 @@ une base neuve.
 
 ## Événements SSE
 
-`analysis.created`, `expert.started`, `tool.started`, `tool.completed`,
+`analysis.created`, `analysis.started`, `agent.round.started`,
+`agent.round.completed`, `expert.started`, `tool.started`, `tool.completed`,
 `tool.failed`, `expert.completed`, `expert.failed`, `expert.timeout`,
 `arbiter.started`, `arbiter.completed`, `arbiter.failed`,
 `agent.response.started`, `agent.response.delta`, `agent.response.completed`,

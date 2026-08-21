@@ -999,6 +999,30 @@ async def run_analysis(
                 analysis_id,
                 exc_info=outcome,
             )
+            escaped_run_id = uuid.uuid4().hex
+            escaped_started_at = db.utc_now_iso()
+            async with (await get_connection()) as conn:
+                await db.upsert_expert_run(
+                    conn,
+                    escaped_run_id,
+                    analysis_id,
+                    role,
+                    "error",
+                    error_code="internal_error",
+                    started_at=escaped_started_at,
+                    completed_at=db.utc_now_iso(),
+                )
+                await db.insert_analysis_event(
+                    conn,
+                    analysis_id,
+                    "expert.failed",
+                    {
+                        "analysis_id": analysis_id,
+                        "role": role,
+                        "error_code": "internal_error",
+                    },
+                    db.utc_now_iso(),
+                )
             escaped_errors.append("internal_error")
             continue
         results.append(outcome)
@@ -1029,7 +1053,7 @@ async def run_analysis(
             verdict.unavailable_agents = missing_roles
 
     if verdict is not None:
-        all_three = all(r.output is not None for r in results)
+        all_three = not missing_roles
         status = "completed" if all_three else "degraded"
         error_code = None
     elif len(valid) >= 2:

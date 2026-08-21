@@ -81,6 +81,7 @@ export function useAnalysisController(
   const snapshotRef = useRef<AnalysisSnapshot | null>(null)
   const startedRef = useRef(false)
   const disconnectedRef = useRef(false)
+  const snapshotGenerationRef = useRef(0)
 
   snapshotRef.current = snapshot
 
@@ -89,9 +90,10 @@ export function useAnalysisController(
   }, [])
 
   const reloadSnapshot = useCallback(
-    async (id: string): Promise<void> => {
+    async (id: string, generation: number = snapshotGenerationRef.current): Promise<void> => {
       try {
         const next = await fetchAnalysisSnapshot(id)
+        if (snapshotGenerationRef.current !== generation) return
         snapshotRef.current = next
         setSnapshot(next)
       } catch (error) {
@@ -116,6 +118,7 @@ export function useAnalysisController(
       return
     }
     const id: string = analysisId
+    const generation = ++snapshotGenerationRef.current
 
     let cancelled = false
     let terminalObserved = false
@@ -213,7 +216,7 @@ export function useAnalysisController(
             client.close()
             sseRef.current = null
             setConnection({ status: 'closed' })
-            void reloadSnapshot(id)
+            void reloadSnapshot(id, generation)
             return
           }
           if (
@@ -223,7 +226,7 @@ export function useAnalysisController(
             event.type === 'arbiter.completed' ||
             event.type === 'arbiter.failed'
           ) {
-            void reloadSnapshot(id)
+            void reloadSnapshot(id, generation)
           }
         },
         onMalformed: (detail: string) => {
@@ -306,7 +309,7 @@ export function useAnalysisController(
         if (historyIsTerminal && !isTerminalAnalysisStatus(initialSnapshot.status)) {
           // L'événement terminal peut être validé juste avant que le snapshot
           // chargé en parallèle ne soit lu. On resynchronise sans rouvrir SSE.
-          void reloadSnapshot(id)
+          void reloadSnapshot(id, generation)
         }
         return
       }
@@ -318,6 +321,7 @@ export function useAnalysisController(
 
     return () => {
       cancelled = true
+      snapshotGenerationRef.current += 1
       if (startFallbackTimer !== null) {
         clearTimeout(startFallbackTimer)
         startFallbackTimer = null

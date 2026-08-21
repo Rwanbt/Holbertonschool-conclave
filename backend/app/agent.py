@@ -311,6 +311,21 @@ async def run_agent_loop(
                         "max_rounds_reached",
                         {"tool": call.function.name},
                     )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": call.function.name,
+                                "status": "error",
+                                "input_summary": {"tool": call.function.name},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "max_rounds_reached",
+                            },
+                        )
                 stop = True
                 stop_reason = "max_rounds_reached"
                 break
@@ -343,6 +358,21 @@ async def run_agent_loop(
                         "one_tool_per_round",
                         {"tool": call.function.name},
                     )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": call.function.name,
+                                "status": "error",
+                                "input_summary": {"tool": call.function.name},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "one_tool_per_round",
+                            },
+                        )
                     messages.append(
                         {
                             "role": "tool",
@@ -377,6 +407,21 @@ async def run_agent_loop(
                         "invalid_arguments",
                         {"requested_tool": name, "arguments_preview": arguments_raw[:200]},
                     )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": name,
+                                "status": "error",
+                                "input_summary": {"requested_tool": name},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "invalid_arguments",
+                            },
+                        )
                     messages.append(
                         {
                             "role": "tool",
@@ -403,6 +448,21 @@ async def run_agent_loop(
                         "repeated_tool_call",
                         {"tool": name, "identical_call": True},
                     )
+                    if tool_event_sink is not None:
+                        await tool_event_sink(
+                            "tool.failed",
+                            {
+                                "agent_role": agent_role,
+                                "llm_round": round_number,
+                                "sequence": len(trace),
+                                "tool_name": name,
+                                "status": "error",
+                                "input_summary": {"tool": name, "identical_call": True},
+                                "output_summary": None,
+                                "duration_ms": 0,
+                                "error_code": "repeated_tool_call",
+                            },
+                        )
                     messages.append(
                         {
                             "role": "tool",

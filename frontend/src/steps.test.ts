@@ -204,3 +204,13 @@ describe('liveExpertRun', () => {
     ).toBe('pending')
   })
 })
+
+describe('liveExpertRun', () => {
+  it('conserve la cause analysis_timeout portée par expert.timeout', () => {
+    const result = liveExpertRun(
+      { role: 'avocat', status: 'running', error_code: null },
+      [makeEvent({ type: 'expert.timeout', payload: { role: 'avocat', error_code: 'analysis_timeout' } })],
+    )
+    expect(result).toEqual({ status: 'timeout', error_code: 'analysis_timeout' })
+  })
+})

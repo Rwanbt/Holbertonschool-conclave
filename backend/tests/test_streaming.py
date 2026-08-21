@@ -170,6 +170,29 @@ class TestEnvelopeParser:
 
 
 class TestStreamCollector:
+    def test_small_live_fragment_flushes_without_a_new_chunk(self) -> None:
+        calls: list[str] = []
+
+        async def sink(kind: str, fields: dict) -> None:
+            if kind == "agent.response.delta":
+                calls.append(fields["delta"])
+
+        collector = StreamCollector(
+            _settings(stream_flush_interval_ms=20, stream_delta_batch_chars=100),
+            live_sink=sink,
+            response_role="avocat",
+        )
+
+        async def go() -> None:
+            await collector.feed(
+                FakeStreamChunk(content="<LIVE_RESPONSE>petit</LIVE_RESPONSE>")
+            )
+            await asyncio.sleep(0.08)
+            await collector.finish()
+
+        _run_async(go())
+        assert calls == ["petit"]
+
     def test_usage_chunk_without_choices_is_kept(self) -> None:
         collector = StreamCollector(_settings())
         _run_async(collector.feed(FakeStreamChunk(content="bonjour", finish_reason="stop")))

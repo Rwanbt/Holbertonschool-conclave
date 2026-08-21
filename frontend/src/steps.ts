@@ -179,7 +179,13 @@ export function liveExpertRun(
             : run.error_code,
       }
     case 'expert.timeout':
-      return { status: 'timeout', error_code: 'expert_timeout' }
+      return {
+        status: 'timeout',
+        error_code:
+          typeof lastEvent.payload.error_code === 'string'
+            ? lastEvent.payload.error_code
+            : run.error_code,
+      }
     default:
       return { status: run.status, error_code: run.error_code }
   }
