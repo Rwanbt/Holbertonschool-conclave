@@ -19,9 +19,9 @@ export interface Explanation {
 
 const EXPLANATIONS: Record<string, Explanation> = {
   provider_unavailable: {
-    what: "Le fournisseur MiniMax n'a pas répondu (réseau coupé, clé invalide ou service indisponible).",
+    what: "Le fournisseur IA n'a pas répondu (réseau coupé, clé invalide ou service indisponible).",
     action:
-      'Vérifiez la connexion réseau et la valeur de MINIMAX_API_KEY côté serveur, puis relancez une analyse.',
+      'Vérifiez votre connexion réseau et votre clé API dans le panneau « Fournisseur IA », puis relancez une analyse.',
   },
   expert_timeout: {
     what: "L'expert a dépassé son délai maximal avant de conclure.",
@@ -39,7 +39,7 @@ const EXPLANATIONS: Record<string, Explanation> = {
   protocol_error: {
     what: "Le modèle n'a pas respecté l'enveloppe de réponse imposée, même après une tentative de correction.",
     action:
-      'Relancez. Si cela se répète, vérifiez le modèle MiniMax configuré, le streaming et le budget EXPERT_MAX_OUTPUT_TOKENS.',
+      'Relancez. Si cela se répète, vérifiez le modèle configuré, le streaming et le budget EXPERT_MAX_OUTPUT_TOKENS.',
   },
   structured_output_error: {
     what: "Le modèle a répondu, mais sa sortie ne validait pas le schéma exigé — elle a donc été refusée plutôt qu'affichée.",

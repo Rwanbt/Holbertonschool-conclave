@@ -57,8 +57,8 @@ function snapshot(overrides: Partial<AnalysisSnapshot> = {}): AnalysisSnapshot {
 describe('explainErrorCode', () => {
   it('traduit une panne fournisseur en explication actionnable', () => {
     const explanation = explainErrorCode('provider_unavailable')
-    expect(explanation.what).toContain('MiniMax')
-    expect(explanation.action).toContain('MINIMAX_API_KEY')
+    expect(explanation.what).toContain('fournisseur IA')
+    expect(explanation.action).toContain('Fournisseur IA')
   })
 
   it('rend un code inconnu tel quel plutôt que de prétendre l’avoir compris', () => {
