@@ -29,6 +29,7 @@ DOC = "Un document API soumis au backend."
 def _settings(tmp_path, **overrides) -> Settings:
     base = {
         "minimax_api_key": "sk-test-not-a-real-key",
+        "allow_server_provider_credentials": True,
         "minimax_max_tool_rounds": 3,
         "minimax_input_usd_per_million": 0.30,
         "minimax_output_usd_per_million": 1.20,

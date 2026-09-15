@@ -39,6 +39,7 @@ from . import agent, db, experts, llm, redact, security, sessions, toolkit
 from .config import Settings, get_settings
 from .providers import (
     ProviderError,
+    build_provider,
     create_adapter,
     list_provider_specs,
 )
@@ -251,6 +252,24 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/api/session")
+async def create_session(
+    response: Response,
+    request_http: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Établit (ou confirme) la session anonyme signée : le cookie est posé une
+    seule fois et toutes les préférences d'outils/analyses en dépendent."""
+    existing = _session_token_from_request(request_http, settings)
+    token = existing if existing is not None else sessions.new_session_token()
+    response.set_cookie(
+        settings.session_cookie_name,
+        sessions.sign_session(token, settings),
+        **sessions.cookie_attributes(settings),
+    )
+    return {"status": "ok"}
+
+
 @app.get("/api/providers", response_model=ProviderCatalogResponse)
 async def list_providers() -> ProviderCatalogResponse:
     specs = list_provider_specs()
@@ -289,7 +308,7 @@ async def test_provider_connection(
             provider_id=request.provider_id,
             model_id=request.model_id,
             ok=False,
-            message=redact.redact_text(exc.message) or exc.message,
+            message=redact.redact_text(str(exc)) or str(exc),
             needs_inference=exc.code == "provider_verification_unavailable",
         )
     finally:
@@ -417,6 +436,7 @@ async def create_analysis(
 
     try:
         async with db.open_connection(settings.database_path) as conn:
+            await db.ensure_session_tool_states(conn, session_token)
             rows = await db.create_queued_analysis(
                 conn,
                 analysis_id=analysis_id,
@@ -481,8 +501,10 @@ async def start_analysis(
     """Démarrage idempotent : compare-and-set SQL `queued` -> `running`.
 
     Le credential BYOK (`api_key`) est reçu ici, enregistré pour la redaction,
-    puis transmis EN MÉMOIRE à la tâche `run_analysis` ; il n'est jamais
-    persisté, diffusé, loggué ou renvoyé."""
+    VALIDÉ (adapter construit) puis transmis EN MÉMOIRE à la tâche
+    `run_analysis` ; il n'est jamais persisté, diffusé, loggué ou renvoyé.
+    Un credential absent/invalide échoue proprement ici (400) SANS transition :
+    l'analyse reste `queued` et l'utilisateur peut reconnecter puis réessayer."""
     session_token = _session_token_from_request(request_http, settings)
     async with db.open_connection(settings.database_path) as conn:
         row = await db.get_analysis(conn, analysis_id)
@@ -492,22 +514,38 @@ async def start_analysis(
             return StartAnalysisResponse(
                 analysis_id=analysis_id, status=row["status"], already_started=True
             )
+        document = row["document"]
+        provider_id = row["provider_id"] or "minimax"
+        model_id = row["model_id"] or settings.minimax_model
+
+    api_key = request.api_key if request is not None else None
+    if api_key:
+        redact.register_secret(api_key)
+
+    try:
+        provider = build_provider(
+            provider_id=provider_id,
+            model_id=model_id,
+            api_key=api_key,
+            settings=settings,
+        )
+    except ProviderError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": redact.redact_text(str(exc)) or str(exc)},
+        )
+
+    async with db.open_connection(settings.database_path) as conn:
         started_at = db.utc_now_iso()
         transitioned = await db.start_analysis(conn, analysis_id, started_at)
         if not transitioned:
             current = await db.get_analysis(conn, analysis_id)
+            await provider.close()
             return StartAnalysisResponse(
                 analysis_id=analysis_id,
                 status=current["status"] if current else "running",
                 already_started=True,
             )
-        document = row["document"]
-        provider_id = row["provider_id"] or "minimax"
-        model_id = row["model_id"] or settings.minimax_model
-        api_key = request.api_key if request is not None else None
-
-    if api_key:
-        redact.register_secret(api_key)
 
     task = asyncio.create_task(
         experts.run_analysis(
@@ -518,6 +556,7 @@ async def start_analysis(
             provider_id=provider_id,
             model=model_id,
             api_key=api_key,
+            provider=provider,
         )
     )
     app.state.analysis_tasks[analysis_id] = task
@@ -758,11 +797,19 @@ async def stream_analysis_events(
 
 
 @app.get("/api/tools", response_model=ToolCatalogResponse)
-async def get_tools_catalog(conn: Any = Depends(get_db)) -> ToolCatalogResponse:
-    """Catalogue des outils et leurs DEFAUTS (jamais l'état d'un autre
-    utilisateur : la configuration réelle d'une analyse est figée à la
-    création via `enabled_tools`)."""
-    states = await db.list_tool_states(conn)
+async def get_tools_catalog(
+    request_http: Request,
+    settings: Settings = Depends(get_settings),
+    conn: Any = Depends(get_db),
+) -> ToolCatalogResponse:
+    """Catalogue des outils pour CETTE session (jamais celui d'un autre
+    utilisateur). Une session sans préférences hérite des defaults globaux."""
+    session_token = _session_token_from_request(request_http, settings)
+    if session_token is None:
+        states = await db.list_tool_states(conn)
+    else:
+        await db.ensure_session_tool_states(conn, session_token)
+        states = await db.list_session_tool_states(conn, session_token)
     return ToolCatalogResponse(
         tools=[toolkit.tool_state_from_row(row) for row in states]
     )
@@ -771,11 +818,24 @@ async def get_tools_catalog(conn: Any = Depends(get_db)) -> ToolCatalogResponse:
 @app.post("/api/tool-commands", response_model=ToolCommandResponse)
 async def apply_tool_command(
     request: ToolCommandRequest,
+    response: Response,
+    request_http: Request,
+    settings: Settings = Depends(get_settings),
     conn: Any = Depends(get_db),
 ) -> ToolCommandResponse:
-    """Commande `/tools` — préférence LOCALE (registre global), utilisée
-    uniquement comme DEFAUT pour les prochaines créations de CETTE instance.
-    La configuration d'une analyse déjà créée reste immuable."""
+    """Commande `/tools` — préférence de CETTE session uniquement. La
+    configuration d'une analyse déjà créée reste immuable (`enabled_tools`
+    figé à la création)."""
+    session_token = _session_token_from_request(request_http, settings)
+    if session_token is None:
+        session_token = sessions.new_session_token()
+        response.set_cookie(
+            settings.session_cookie_name,
+            sessions.sign_session(session_token, settings),
+            **sessions.cookie_attributes(settings),
+        )
+    await db.ensure_session_tool_states(conn, session_token)
+
     try:
         action, tool_name = toolkit.parse_tool_command(request.command)
     except toolkit.ToolCommandSyntaxError as exc:
@@ -785,25 +845,25 @@ async def apply_tool_command(
         ) from exc
 
     if action == "list":
-        states = await db.list_tool_states(conn)
+        states = await db.list_session_tool_states(conn, session_token)
         tools = [toolkit.tool_state_from_row(row) for row in states]
         return ToolCommandResponse(
             action="list",
-            message="Catalogue des outils (états par défaut de l'instance).",
+            message="Catalogue des outils (préférences de cette session).",
             tool_name=None,
             enabled=None,
             tools=tools,
         )
 
     enabled = action == "enable"
-    await db.set_tool_state(conn, tool_name, enabled)
-    states = await db.list_tool_states(conn)
+    await db.set_session_tool_state(conn, session_token, tool_name, enabled)
+    states = await db.list_session_tool_states(conn, session_token)
     tools = [toolkit.tool_state_from_row(row) for row in states]
     return ToolCommandResponse(
         action=action,
         message=(
             f"Outil {tool_name} {'activé' if enabled else 'désactivé'} "
-            "(défaut pour les prochaines analyses)."
+            "(préférence de cette session, figée par analyse)."
         ),
         tool_name=tool_name,
         enabled=enabled,

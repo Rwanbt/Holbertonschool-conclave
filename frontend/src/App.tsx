@@ -1,5 +1,5 @@
-import { useCallback, useState, type FormEvent } from 'react'
-import { createAnalysis } from './api/client'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { createAnalysis, establishSession } from './api/client'
 import { ArbiterLivePanel } from './components/ArbiterLivePanel'
 import { ConclaveStepper } from './components/ConclaveStepper'
 import { DebugPanel } from './components/DebugPanel'
@@ -77,6 +77,10 @@ export default function App() {
   const provider = useProviderConnection()
   const controller = useAnalysisController(analysisId, handleNotFound, provider.apiKey)
   const theme = useTheme()
+
+  useEffect(() => {
+    void establishSession()
+  }, [])
 
   const isNew = analysisId === null
   const snapshot = controller.snapshot

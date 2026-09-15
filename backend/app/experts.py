@@ -1168,6 +1168,7 @@ async def run_analysis(
     provider_id: str = "minimax",
     model: str | None = None,
     api_key: str | None = None,
+    provider: Any | None = None,
 ) -> AnalysisResult:
     """Orchestration complète d'une analyse (statuts, événements, persistance).
 
@@ -1178,6 +1179,8 @@ async def run_analysis(
 
     `provider_id`/`model`/`api_key` figent la sélection provider de l'analyse
     et le credential runtime BYOK (en mémoire uniquement, jamais persisté).
+    `provider`, quand fourni, évite de reconstruire l'adapter (la route a déjà
+    validé le credential).
     """
     session = AgentSession(document=document)
     # Nonce régénéré à chaque analyse : le document ne peut pas deviner la
@@ -1194,12 +1197,13 @@ async def run_analysis(
         row["tool_name"] for row in tool_rows if row["enabled"]
     )
 
-    provider = build_provider(
-        provider_id=provider_id,
-        model_id=model or settings.minimax_model,
-        api_key=api_key,
-        settings=settings,
-    )
+    if provider is None:
+        provider = build_provider(
+            provider_id=provider_id,
+            model_id=model or settings.minimax_model,
+            api_key=api_key,
+            settings=settings,
+        )
 
     results: list[ExpertRunResult] = []
 

@@ -16,7 +16,7 @@ from typing import Any
 
 import pytest
 
-from backend.app import agent, experts
+from backend.app import agent, experts, main
 from backend.app.providers.types import (
     ProviderChunk,
     ProviderChoice,
@@ -337,6 +337,7 @@ def patch_minimax(monkeypatch):
     def _patch(client: FakeClient) -> None:
         monkeypatch.setattr(agent, "build_provider", fake_client_factory(client))
         monkeypatch.setattr(experts, "build_provider", fake_client_factory(client))
+        monkeypatch.setattr(main, "build_provider", fake_client_factory(client))
 
     return _patch
 

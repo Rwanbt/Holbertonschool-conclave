@@ -27,6 +27,7 @@ from .conftest import FakeClient, scripted_arbiter, scripted_experts
 def _settings(tmp_path, **overrides) -> Settings:
     base = {
         "minimax_api_key": "sk-test-not-a-real-key",
+        "allow_server_provider_credentials": True,
         "database_path": str(tmp_path / "sec.db"),
         "minimax_input_usd_per_million": 0.30,
         "minimax_output_usd_per_million": 1.20,

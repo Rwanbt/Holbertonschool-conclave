@@ -136,6 +136,10 @@ def _map_http_error(exc: httpx.HTTPError, status: int | None = None) -> Provider
                 "provider_protocol_error",
                 "Google Gemini a rejeté la requête (400).",
             )
+        if status == 408:
+            return ProviderError(
+                "provider_timeout", "Délai dépassé chez Google Gemini."
+            )
         if 500 <= status < 600:
             return ProviderError(
                 "provider_unavailable",

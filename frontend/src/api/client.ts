@@ -40,6 +40,18 @@ const PROVIDER_TEST_ENDPOINT: string = `${BASE_URL}/api/providers/test-connectio
 // TOUTES les requêtes : `credentials: 'include'`.
 const CREDENTIALS: RequestCredentials = 'include'
 
+export async function establishSession(): Promise<void> {
+  try {
+    await fetch(`${BASE_URL}/api/session`, {
+      method: 'POST',
+      credentials: CREDENTIALS,
+    })
+  } catch {
+    // Le backend posera la session à la première analyse ; ceci n'est qu'une
+    // anticipation pour isoler dès l'ouverture les préférences d'outils.
+  }
+}
+
 export async function runAgent(
   instruction: string,
   document: string,

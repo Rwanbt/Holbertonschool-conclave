@@ -101,6 +101,14 @@ SCHEMA_SQL: tuple[str, ...] = (
         enabled INTEGER NOT NULL,
         PRIMARY KEY (analysis_id, tool_name)
     )""",
+    # Préférences d'outils PAR SESSION (isolation multi-utilisateur) : un
+    # utilisateur ne modifie jamais les réglages d'un autre.
+    """CREATE TABLE IF NOT EXISTS session_tool_states (
+        session_token TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        PRIMARY KEY (session_token, tool_name)
+    )""",
     # Signaux d'injection repérés à la soumission, conservés avec l'analyse
     # pour rester consultables après un rechargement (observabilité).
     """CREATE TABLE IF NOT EXISTS analysis_security (
@@ -389,6 +397,16 @@ async def create_queued_analysis(
             "SELECT ?, tool_name, enabled FROM tool_states",
             (analysis_id,),
         )
+        if enabled_tools is None and owner_session is not None:
+            # Une session avec préférences hérite de SES choix, pas de ceux
+            # d'un autre utilisateur (isolation multi-utilisateur).
+            await conn.execute(
+                "INSERT OR REPLACE INTO analysis_tool_states "
+                "(analysis_id, tool_name, enabled) "
+                "SELECT ?, tool_name, enabled FROM session_tool_states "
+                "WHERE session_token = ?",
+                (analysis_id, owner_session),
+            )
         rows = await list_analysis_tool_states(conn, analysis_id)
         enabled_names = [row["tool_name"] for row in rows if row["enabled"]]
         disabled_names = [row["tool_name"] for row in rows if not row["enabled"]]
@@ -792,5 +810,51 @@ async def set_tool_state(
         "INSERT INTO tool_states (tool_name, enabled) VALUES (?, ?) "
         "ON CONFLICT(tool_name) DO UPDATE SET enabled = excluded.enabled",
         (tool_name, 1 if enabled else 0),
+    )
+    await conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Préférences d'outils PAR SESSION (isolation multi-utilisateur)
+# ---------------------------------------------------------------------------
+
+
+async def ensure_session_tool_states(
+    conn: aiosqlite.Connection, session_token: str
+) -> None:
+    """Initialise les préférences d'une session à partir du registre global
+    (INSERT OR IGNORE) : une session neuve hérite des defaults, une session
+    existante conserve ses choix."""
+    await conn.execute(
+        "INSERT OR IGNORE INTO session_tool_states (session_token, tool_name, enabled) "
+        "SELECT ?, tool_name, enabled FROM tool_states",
+        (session_token,),
+    )
+    await conn.commit()
+
+
+async def list_session_tool_states(
+    conn: aiosqlite.Connection, session_token: str
+) -> list[aiosqlite.Row]:
+    cursor = await conn.execute(
+        "SELECT tool_name, enabled FROM session_tool_states "
+        "WHERE session_token = ? ORDER BY tool_name",
+        (session_token,),
+    )
+    return list(await cursor.fetchall())
+
+
+async def set_session_tool_state(
+    conn: aiosqlite.Connection,
+    session_token: str,
+    tool_name: str,
+    enabled: bool,
+) -> None:
+    await conn.execute(
+        "INSERT INTO session_tool_states (session_token, tool_name, enabled) "
+        "VALUES (?, ?, ?) "
+        "ON CONFLICT(session_token, tool_name) "
+        "DO UPDATE SET enabled = excluded.enabled",
+        (session_token, tool_name, 1 if enabled else 0),
     )
     await conn.commit()
