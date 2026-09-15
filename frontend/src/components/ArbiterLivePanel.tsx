@@ -17,7 +17,7 @@ export function ArbiterLivePanel({ live }: ArbiterLivePanelProps) {
         <span className="arbiter-live-badge" aria-live="polite">
           {interrupted
             ? 'Interrompu — non validé'
-            : 'Génération MiniMax en direct — validation en attente'}
+            : 'Génération en direct — validation en attente'}
         </span>
       </header>
 

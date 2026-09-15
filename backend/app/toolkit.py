@@ -44,7 +44,8 @@ TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "name": "estimate_current_analysis_cost",
         "description": (
             "Estime le coût en dollars d'une analyse du document chargé sur le serveur, "
-            "en fonction des tarifs MiniMax configurés et du budget de sortie. "
+            "en fonction des tarifs du fournisseur et du modèle configurés "
+            "et du budget de sortie. "
             "Appelle-le APRÈS avoir observé les métriques du document. "
             "Cet outil ne prend aucun argument."
         ),

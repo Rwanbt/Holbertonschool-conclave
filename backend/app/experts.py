@@ -664,7 +664,7 @@ async def run_expert(
     except asyncio.TimeoutError:
         return await fail_run("timeout", "expert_timeout", timed_out=True)
     except ProviderError:
-        # Réseau coupé, clé invalide, 5xx MiniMax : la cause est CONNUE et
+        # Réseau coupé, clé invalide, 5xx provider : la cause est CONNUE et
         # doit être dite telle quelle, jamais traduite en autre chose.
         return await fail_run("error", "provider_unavailable")
     except asyncio.CancelledError:

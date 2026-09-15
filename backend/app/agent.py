@@ -376,7 +376,7 @@ async def run_agent_loop(
                     await emit_round_completed(
                         round_number, "provider_error", round_latency_ms
                     )
-                    raise ProviderError("MiniMax agent returned an empty answer")
+                    raise ProviderError("Provider agent returned an empty answer")
                 answer = final_json or content
                 await emit_round_completed(
                     round_number, "final_response", round_latency_ms
