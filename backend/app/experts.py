@@ -291,7 +291,14 @@ class AnalysisResult:
 # sorties. Sans cet ordre, une coupure réseau était annoncée à l'utilisateur
 # comme « pas assez d'experts exploitables » — un mensonge.
 _FAILURE_PRIORITY: tuple[str, ...] = (
+    "provider_auth_failed",
+    "provider_rate_limited",
+    "provider_timeout",
+    "model_not_available",
+    "provider_capability_missing",
+    "provider_protocol_error",
     "provider_unavailable",
+    "provider_error",
     "internal_error",
     "expert_timeout",
     "protocol_error",
@@ -399,10 +406,13 @@ async def _repair_structured_output(
             tool_choice=None,
             response_format={"type": "json_object"},
         )
-    except Exception as exc:  # noqa: BLE001 - cause fournisseur explicite
-        code = exc.code if isinstance(exc, ProviderError) else "provider_error"
+    except ProviderError:
+        # Cause fournisseur normalisée (auth, 429, timeout…) : propagée telle
+        # quelle.
+        raise
+    except Exception as exc:  # noqa: BLE001 - panne provider générique
         raise ProviderError(
-            code,
+            "provider_unavailable",
             f"Structured repair failed: {exc.__class__.__name__}",
         ) from exc
     latency_ms = int((time.monotonic() - started) * 1000)
@@ -663,10 +673,11 @@ async def run_expert(
         )
     except asyncio.TimeoutError:
         return await fail_run("timeout", "expert_timeout", timed_out=True)
-    except ProviderError:
+    except ProviderError as exc:
         # Réseau coupé, clé invalide, 5xx provider : la cause est CONNUE et
-        # doit être dite telle quelle, jamais traduite en autre chose.
-        return await fail_run("error", "provider_unavailable")
+        # doit être dite telle quelle (`provider_auth_failed`,
+        # `provider_rate_limited`, `provider_timeout`…), jamais maquillée.
+        return await fail_run("error", exc.code or "provider_unavailable")
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 - jamais avalé : tracé puis nommé
@@ -786,9 +797,9 @@ AgentOutput.model_json_schema(),
                     )
                     if output is not None:
                         break
-            except ProviderError:
+            except ProviderError as exc:
                 return await fail_run(
-                    "error", "provider_unavailable", usage=run_usage
+                    "error", exc.code or "provider_unavailable", usage=run_usage
                 )
             except Exception:  # noqa: BLE001 - tracé et nommé
                 logger.exception(
@@ -1036,8 +1047,8 @@ async def run_arbiter(
         )
     except asyncio.TimeoutError:
         return await fail_arbiter("arbiter_timeout")
-    except ProviderError:
-        return await fail_arbiter("provider_unavailable")
+    except ProviderError as exc:
+        return await fail_arbiter(exc.code or "provider_unavailable")
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 - jamais avalé : tracé puis nommé
@@ -1128,8 +1139,10 @@ async def run_arbiter(
                     )
                     if verdict is not None:
                         break
-            except ProviderError:
-                return await fail_arbiter("provider_unavailable", arbiter_usage)
+            except ProviderError as exc:
+                return await fail_arbiter(
+                    exc.code or "provider_unavailable", arbiter_usage
+                )
             except Exception:  # noqa: BLE001 - tracé et nommé
                 logger.exception(
                     "arbiter repair failed internally (analysis %s)", analysis_id

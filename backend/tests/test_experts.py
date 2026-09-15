@@ -486,3 +486,57 @@ class TestGuardrails:
 
         assert result.status == "failed"
         assert result.error_code == "analysis_timeout"
+
+
+class TestProviderFailureCodes:
+    """Une clé invalide/quotas doit être NOMMÉE précisément, pas maquillée."""
+
+    def _auth_fail_client(self):
+        from backend.app.providers import ProviderError
+
+        class AuthFailClient:
+            async def close(self):
+                return None
+
+            async def complete(self, **_kwargs):
+                raise ProviderError("provider_auth_failed", "clé invalide")
+
+            async def stream_chat(self, **_kwargs):
+                raise ProviderError("provider_auth_failed", "clé invalide")
+                yield  # pragma: no cover
+
+        return AuthFailClient()
+
+    def test_invalid_key_surfaces_provider_auth_failed(self, tmp_path, monkeypatch):
+        settings = _settings(tmp_path)
+        client = self._auth_fail_client()
+        monkeypatch.setattr(experts, "build_provider", lambda **kwargs: client)
+
+        result = _run_analysis(tmp_path, settings, client)
+
+        assert result.status == "failed"
+        assert result.error_code == "provider_auth_failed"
+        assert all(e.error_code == "provider_auth_failed" for e in result.experts)
+
+    def test_rate_limit_surfaces_provider_rate_limited(self, tmp_path, monkeypatch):
+        from backend.app.providers import ProviderError
+
+        class RateLimitedClient:
+            async def close(self):
+                return None
+
+            async def complete(self, **_kwargs):
+                raise ProviderError("provider_rate_limited", "429")
+
+            async def stream_chat(self, **_kwargs):
+                raise ProviderError("provider_rate_limited", "429")
+                yield  # pragma: no cover
+
+        settings = _settings(tmp_path)
+        client = RateLimitedClient()
+        monkeypatch.setattr(experts, "build_provider", lambda **kwargs: client)
+
+        result = _run_analysis(tmp_path, settings, client)
+
+        assert result.status == "failed"
+        assert result.error_code == "provider_rate_limited"

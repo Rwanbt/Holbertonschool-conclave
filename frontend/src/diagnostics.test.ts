@@ -190,3 +190,21 @@ describe('resolveTheme', () => {
     expect(resolveTheme('dark', false)).toBe('dark')
   })
 })
+
+describe('explainErrorCode — erreurs provider normalisées', () => {
+  it('explique une clé refusée de façon actionnable', () => {
+    const explanation = explainErrorCode('provider_auth_failed')
+    expect(explanation.what.toLowerCase()).toContain('clé')
+    expect(explanation.action).toContain('Fournisseur IA')
+  })
+
+  it('explique un quota atteint', () => {
+    const explanation = explainErrorCode('provider_rate_limited')
+    expect(explanation.what.toLowerCase()).toContain('quota')
+    expect(explanation.action).not.toBeNull()
+  })
+
+  it('explique un modèle indisponible', () => {
+    expect(explainErrorCode('model_not_available').action).toContain('modèle')
+  })
+})

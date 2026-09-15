@@ -23,6 +23,32 @@ const EXPLANATIONS: Record<string, Explanation> = {
     action:
       'Vérifiez votre connexion réseau et votre clé API dans le panneau « Fournisseur IA », puis relancez une analyse.',
   },
+  provider_auth_failed: {
+    what: "Le fournisseur a refusé votre clé API (invalide, expirée ou révoquée).",
+    action:
+      'Reconnectez-vous dans le panneau « Fournisseur IA » avec une clé API valide, puis relancez.',
+  },
+  provider_rate_limited: {
+    what: "Votre quota ou la limite de débit du fournisseur est atteint.",
+    action:
+      'Attendez quelques instants ou vérifiez votre quota chez le fournisseur, puis relancez.',
+  },
+  provider_timeout: {
+    what: "Le fournisseur n'a pas répondu dans le délai imparti.",
+    action: 'Relancez l’analyse ; si cela se répète, choisissez un autre modèle ou fournisseur.',
+  },
+  model_not_available: {
+    what: "Le modèle sélectionné n'est pas accessible avec votre clé (inexistant ou non autorisé).",
+    action: 'Choisissez un autre modèle dans le panneau « Fournisseur IA ».',
+  },
+  provider_capability_missing: {
+    what: "Le modèle ne prend pas en charge une capacité requise (outils, streaming ou sortie structurée).",
+    action: 'Choisissez un modèle compatible dans le panneau « Fournisseur IA ».',
+  },
+  provider_protocol_error: {
+    what: "Le fournisseur a rejeté la requête ou renvoyé une réponse inexploitable.",
+    action: 'Relancez ; si cela se répète, changez de modèle ou de fournisseur.',
+  },
   expert_timeout: {
     what: "L'expert a dépassé son délai maximal avant de conclure.",
     action:

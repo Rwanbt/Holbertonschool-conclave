@@ -256,17 +256,22 @@ async def run_agent_loop(
             try:
                 completion = await _call(messages)
             except LiveSinkError:
-                # Une panne SQLite/UI dans le sink n'est pas une panne MiniMax.
+                # Une panne SQLite/UI dans le sink n'est pas une panne provider.
                 # L'appelant la trace comme erreur interne.
                 raise
-            except Exception as exc:  # noqa: BLE001 - toute cause mène au 502
+            except ProviderError:
+                # Cause fournisseur DÉJÀ normalisée (auth, 429, timeout, modèle,
+                # protocole) : on la propage telle quelle, sans la maquiller.
+                raise
+            except Exception as exc:  # noqa: BLE001 - panne provider générique
                 round_latency_ms = int((time.monotonic() - started) * 1000)
                 total_latency_ms += round_latency_ms
                 await emit_round_completed(
                     round_number, "provider_error", round_latency_ms
                 )
                 raise ProviderError(
-                    f"MiniMax agent request failed: {exc.__class__.__name__}"
+                    "provider_unavailable",
+                    f"Provider agent request failed: {exc.__class__.__name__}",
                 ) from exc
             record_usage(completion)
 
