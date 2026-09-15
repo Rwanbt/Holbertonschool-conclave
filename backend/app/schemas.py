@@ -240,6 +240,11 @@ class AnalysisCreated(BaseModel):
     created_at: str = Field(..., description="Date de création ISO-8601 UTC.")
     provider_id: str = Field(..., description="Fournisseur figé pour l'analyse.")
     model_id: str = Field(..., description="Modèle figé pour l'analyse.")
+    session_token: str = Field(
+        ...,
+        description="Token de session anonyme (jamais une clé provider) : à "
+        "transporter en en-tête X-Session-Token pour accéder à cette analyse.",
+    )
     tool_configuration: ToolConfiguration = Field(
         ..., description="Configuration des outils figée pour cette analyse."
     )

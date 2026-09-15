@@ -118,6 +118,7 @@ export interface AnalysisCreated {
   created_at: string
   provider_id: string
   model_id: string
+  session_token: string
   tool_configuration: ToolConfiguration
   security: SecurityReport
 }

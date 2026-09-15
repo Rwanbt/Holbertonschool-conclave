@@ -111,7 +111,7 @@ app.add_middleware(
     allow_origins=_parse_origins(_boot_settings.frontend_origins),
     allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-Session-Token"],
 )
 
 #: Le document est plafonné à 12 000 caractères (Pydantic). Mais Pydantic ne
@@ -211,6 +211,11 @@ async def get_db(settings: Settings = Depends(get_settings)):
 
 
 def _session_token_from_request(request: Request, settings: Settings) -> str | None:
+    """Token de session : en-tête `X-Session-Token` d'abord (transport
+    cross-site, indépendant du SameSite du cookie), puis cookie signé."""
+    header_token = request.headers.get("x-session-token")
+    if header_token and header_token.strip():
+        return header_token.strip()
     raw = request.cookies.get(settings.session_cookie_name)
     if not raw:
         return None
@@ -258,8 +263,9 @@ async def create_session(
     request_http: Request,
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
-    """Établit (ou confirme) la session anonyme signée : le cookie est posé une
-    seule fois et toutes les préférences d'outils/analyses en dépendent."""
+    """Établit (ou confirme) la session anonyme : le cookie est posé (mode
+    même-site) et le token est RENVOYÉ pour être transporté en en-tête
+    `X-Session-Token` (mode cross-site, Netlify ↔ backend)."""
     existing = _session_token_from_request(request_http, settings)
     token = existing if existing is not None else sessions.new_session_token()
     response.set_cookie(
@@ -267,7 +273,7 @@ async def create_session(
         sessions.sign_session(token, settings),
         **sessions.cookie_attributes(settings),
     )
-    return {"status": "ok"}
+    return {"status": "ok", "session_token": token}
 
 
 @app.get("/api/providers", response_model=ProviderCatalogResponse)
@@ -481,6 +487,7 @@ async def create_analysis(
         created_at=now,
         provider_id=provider_id,
         model_id=model_id,
+        session_token=session_token,
         tool_configuration=tool_configuration,
         security=SecurityReport(
             prompt_injection_suspected=bool(signals), signals=signals

@@ -129,6 +129,32 @@ class TestCrossUserIsolation:
             assert b_snap["provider_id"] == "minimax"
             assert b_snap["model_id"] == "MiniMax-M3"
 
+    def test_session_via_x_session_token_header_cross_site(self, happy_client) -> None:
+        """Régression : la session doit fonctionner par EN-TÊTE (cross-site
+        Netlify ↔ backend), pas seulement par cookie SameSite."""
+        with TestClient(app) as a, TestClient(app) as b:
+            session = a.post("/api/session")
+            assert session.status_code == 200
+            token = session.json().get("session_token")
+            assert token
+
+            headers = {"X-Session-Token": token}
+            created = a.post(
+                "/api/analyses", headers=headers, json={"document": DOC}
+            ).json()
+            analysis_id = created["analysis_id"]
+            # Le token renvoyé par la création complète la session si besoin.
+            assert created["session_token"] == token
+
+            assert a.get(f"/api/analyses/{analysis_id}", headers=headers).status_code == 200
+            assert (
+                a.get(f"/api/analyses/{analysis_id}/events/history", headers=headers).status_code
+                == 200
+            )
+            # Un autre utilisateur, sans token ni cookie, est exclu (404).
+            assert b.get(f"/api/analyses/{analysis_id}").status_code == 404
+            assert b.post(f"/api/analyses/{analysis_id}/start").status_code == 404
+
 
 class TestSecretNeverLeaks:
     def test_credential_never_leaks_anywhere(self, tmp_path, happy_client) -> None:

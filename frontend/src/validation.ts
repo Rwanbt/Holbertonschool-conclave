@@ -412,6 +412,7 @@ export function parseAnalysisCreated(body: unknown): AnalysisCreated {
   const created_at = readString(record, 'created_at')
   const provider_id = readNonEmptyString(record, 'provider_id')
   const model_id = readNonEmptyString(record, 'model_id')
+  const session_token = readNonEmptyString(record, 'session_token')
   const tool_configuration = parseToolConfiguration(record.tool_configuration)
   const security = parseSecurityReport(record.security)
   return {
@@ -420,6 +421,7 @@ export function parseAnalysisCreated(body: unknown): AnalysisCreated {
     created_at,
     provider_id,
     model_id,
+    session_token,
     tool_configuration,
     security,
   }

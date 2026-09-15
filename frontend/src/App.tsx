@@ -17,6 +17,7 @@ import {
   clearStoredAnalysisId,
   readStoredAnalysisId,
   writeStoredAnalysisId,
+  writeStoredSessionToken,
 } from './storage'
 import { isTerminalAnalysisStatus, liveExpertRun } from './steps'
 import type { AnalysisStatus } from './types'
@@ -113,6 +114,7 @@ export default function App() {
         provider.selectedModelId,
         enabledTools,
       )
+      writeStoredSessionToken(created.session_token)
       writeStoredAnalysisId(created.analysis_id)
       history.replaceState(null, '', buildUrlWithAnalysisId(new URL(window.location.href), created.analysis_id))
       setAnalysisId(created.analysis_id)

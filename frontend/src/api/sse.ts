@@ -1,5 +1,6 @@
 import type { AnalysisEvent } from '../types'
 import { parseAnalysisEvent, ResponseValidationError } from '../validation'
+import { readStoredSessionToken } from '../storage'
 
 const API_BASE_URL: string =
   import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -57,9 +58,15 @@ export function openAnalysisEventSource(
   const run = async (): Promise<void> => {
     let response: Response
     try {
+      const sessionToken = readStoredSessionToken()
       response = await fetch(url, {
         method: 'GET',
-        headers: { Accept: 'text/event-stream' },
+        headers: {
+          Accept: 'text/event-stream',
+          ...(sessionToken !== null && sessionToken.length > 0
+            ? { 'X-Session-Token': sessionToken }
+            : {}),
+        },
         credentials: 'include',
         signal: controller.signal,
       })

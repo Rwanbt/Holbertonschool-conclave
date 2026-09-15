@@ -1,5 +1,6 @@
 export const ANALYSIS_ID_KEY = 'conclave.currentAnalysisId.v1'
 export const LAST_EVENT_ID_KEY = 'conclave.lastEventId.v1'
+export const SESSION_TOKEN_KEY = 'conclave.sessionToken.v1'
 
 export interface BrowserStorage {
   getItem(key: string): string | null
@@ -66,6 +67,29 @@ export function writeStoredLastEventId(analysisId: string, eventId: number): voi
 
 function lastEventKeyFor(analysisId: string): string {
   return `${LAST_EVENT_ID_KEY}.${analysisId}`
+}
+
+// ---------------------------------------------------------------------------
+// Token de session anonyme — sessionStorage (survit au F5, effacé à la fermeture
+// de l'onglet). Transporté en en-tête `X-Session-Token` : indépendant du
+// SameSite du cookie, donc fonctionne aussi en cross-site (Netlify ↔ backend).
+// Ce n'est PAS une clé provider : aucun secret fournisseur n'est stocké ici.
+// ---------------------------------------------------------------------------
+
+export function readStoredSessionToken(): string | null {
+  try {
+    return window.sessionStorage.getItem(SESSION_TOKEN_KEY)
+  } catch {
+    return null
+  }
+}
+
+export function writeStoredSessionToken(token: string): void {
+  try {
+    window.sessionStorage.setItem(SESSION_TOKEN_KEY, token)
+  } catch {
+    // stockage indisponible : le cookie (même-site) restera le transport.
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -155,6 +155,7 @@ describe('parseAnalysisCreated', () => {
       created_at: '2026-08-19T10:00:00+00:00',
       provider_id: 'minimax',
       model_id: 'MiniMax-M3',
+      session_token: 'abc123-session',
       tool_configuration: {
         enabled_tools: ['measure_current_document'],
         disabled_tools: [

@@ -23,6 +23,7 @@ import {
   parseToolCommandResponse,
   ResponseValidationError,
 } from '../validation'
+import { readStoredSessionToken, writeStoredSessionToken } from '../storage'
 
 const API_BASE_URL: string =
   import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -37,15 +38,34 @@ const PROVIDERS_ENDPOINT: string = `${BASE_URL}/api/providers`
 const PROVIDER_TEST_ENDPOINT: string = `${BASE_URL}/api/providers/test-connection`
 
 // Le cookie de session anonyme (isolation multi-utilisateur) doit accompagner
-// TOUTES les requêtes : `credentials: 'include'`.
+// TOUTES les requêtes : `credentials: 'include'`. Le token de session est
+// AUSSI envoyé en en-tête `X-Session-Token` pour rester fonctionnel en
+// cross-site (Netlify ↔ backend), indépendamment du SameSite du cookie.
 const CREDENTIALS: RequestCredentials = 'include'
+
+function sessionHeaders(): Record<string, string> {
+  const token = readStoredSessionToken()
+  return token !== null && token.length > 0 ? { 'X-Session-Token': token } : {}
+}
 
 export async function establishSession(): Promise<void> {
   try {
-    await fetch(`${BASE_URL}/api/session`, {
+    const response = await fetch(`${BASE_URL}/api/session`, {
       method: 'POST',
       credentials: CREDENTIALS,
+      headers: sessionHeaders(),
     })
+    if (response.ok) {
+      const body: unknown = await response.json()
+      if (
+        typeof body === 'object' &&
+        body !== null &&
+        'session_token' in body &&
+        typeof (body as Record<string, unknown>).session_token === 'string'
+      ) {
+        writeStoredSessionToken((body as Record<string, string>).session_token)
+      }
+    }
   } catch {
     // Le backend posera la session à la première analyse ; ceci n'est qu'une
     // anticipation pour isoler dès l'ouverture les préférences d'outils.
@@ -62,7 +82,7 @@ export async function runAgent(
   try {
     response = await fetch(AGENT_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
       body: JSON.stringify(requestBody),
       credentials: CREDENTIALS,
     })
@@ -85,7 +105,7 @@ export async function runAgent(
 export async function fetchProviderCatalog(): Promise<ProviderCatalogResponse> {
   let response: Response
   try {
-    response = await fetch(PROVIDERS_ENDPOINT, { credentials: CREDENTIALS })
+    response = await fetch(PROVIDERS_ENDPOINT, { credentials: CREDENTIALS, headers: sessionHeaders() })
   } catch {
     throw {
       kind: 'network',
@@ -108,7 +128,7 @@ export async function testProviderConnection(
   try {
     response = await fetch(PROVIDER_TEST_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
       body: JSON.stringify({
         provider_id: providerId,
         model_id: modelId,
@@ -139,7 +159,7 @@ export async function createAnalysis(
   try {
     response = await fetch(ANALYSES_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
       body: JSON.stringify({
         document,
         provider_id: providerId,
@@ -172,7 +192,7 @@ export async function startAnalysis(
   try {
     response = await fetch(`${ANALYSES_ENDPOINT}/${analysisId}/start`, {
       method: 'POST',
-      headers: hasCredential ? { 'Content-Type': 'application/json' } : undefined,
+      headers: { ...sessionHeaders(), ...(hasCredential ? { 'Content-Type': 'application/json' } : {}) },
       body: hasCredential ? JSON.stringify({ api_key: apiKey }) : undefined,
       credentials: CREDENTIALS,
     })
@@ -200,7 +220,7 @@ export async function fetchEventsHistory(
   try {
     response = await fetch(
       `${ANALYSES_ENDPOINT}/${analysisId}/events/history?after=${Math.max(0, after)}&limit=${limit}`,
-      { credentials: CREDENTIALS },
+      { credentials: CREDENTIALS, headers: sessionHeaders() },
     )
   } catch {
     throw {
@@ -243,7 +263,7 @@ export async function fetchAnalysisSnapshot(
 export async function fetchToolCatalog(): Promise<ToolCatalogResponse> {
   let response: Response
   try {
-    response = await fetch(TOOLS_ENDPOINT, { credentials: CREDENTIALS })
+    response = await fetch(TOOLS_ENDPOINT, { credentials: CREDENTIALS, headers: sessionHeaders() })
   } catch {
     throw {
       kind: 'network',
@@ -266,7 +286,7 @@ export async function applyToolCommand(
   try {
     response = await fetch(TOOL_COMMANDS_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
       body: JSON.stringify({ command }),
       credentials: CREDENTIALS,
     })
