@@ -4,15 +4,19 @@
 - `PRAGMA foreign_keys = ON`, `journal_mode = WAL`, `busy_timeout`.
 - Tables : schema_meta, analyses, expert_runs, tool_events, analysis_events,
   tool_states, analysis_tool_states et analysis_security (v2).
-- L'initialisation est idempotente et se fait dans le lifespan FastAPI.
+- L'initialisation est idempotente et se fait dans le lifespan FastAPI. Les
+  bases créées par une version antérieure sont migrées (ALTER TABLE ADD COLUMN)
+  sans perdre les données.
 - Une analyse `running` trouvée au démarrage devient `interrupted` sans perte
   des résultats déjà persistés ; une analyse `queued` reste `queued` (elle
   n'a jamais démarré de tâche de fond, un rechargement peut la démarrer).
-- `DISABLED_TOOLS` ne sert qu'à initialiser une base neuve : ensuite la table
-  `tool_states` (registre global, pour la prochaine analyse) est la source
-  de vérité. `analysis_tool_states` fige, pour une analyse déjà créée, la
-  configuration lue dans `tool_states` au moment de sa création : elle seule
-  fait foi pour cette analyse, y compris si le registre global change ensuite.
+- `DISABLED_TOOLS` ne sert qu'à initialiser une base neuve : ensuite, la
+  configuration d'outils d'UNE analyse est envoyée EXPLICITEMENT par le
+  frontend à la création (`enabled_tools`), validée contre le catalogue, et
+  figée dans `analysis_tool_states` (elle seule fait foi pour cette analyse).
+- Chaque analyse fige aussi sa sélection provider NON secrète
+  (`provider_id`, `model_id`, `tool_config_json`) et son `owner_session` pour
+  l'isolation multi-utilisateur. Le credential BYOK n'est JAMAIS persisté.
 
 Toute donnée JSON écrite ici provient de modèles Pydantic validés
 (`model_dump(mode="json")`), jamais d'un texte LLM brut.
@@ -28,7 +32,7 @@ from typing import Any, AsyncIterator
 
 import aiosqlite
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "3"
 
 KNOWN_TOOL_NAMES: tuple[str, ...] = (
     "measure_current_document",
@@ -50,7 +54,11 @@ SCHEMA_SQL: tuple[str, ...] = (
         completed_at TEXT,
         error_code TEXT,
         usage_json TEXT,
-        verdict_json TEXT
+        verdict_json TEXT,
+        owner_session TEXT,
+        provider_id TEXT,
+        model_id TEXT,
+        tool_config_json TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS expert_runs (
         id TEXT PRIMARY KEY,
@@ -118,6 +126,14 @@ class ActiveAnalysisLimitReached(RuntimeError):
         self.active = active
 
 
+class SessionAnalysisLimitReached(RuntimeError):
+    """La limite par session a été vérifiée sous verrou d'écriture SQLite."""
+
+    def __init__(self, active: int) -> None:
+        super().__init__(f"session analysis limit reached: {active}")
+        self.active = active
+
+
 def utc_now_iso() -> str:
     """Date UTC explicite au format ISO-8601 (p.ex. 2026-08-19T10:15:30+00:00)."""
     return datetime.now(timezone.utc).isoformat()
@@ -142,11 +158,12 @@ async def open_connection(database_path: str) -> AsyncIterator[aiosqlite.Connect
 
 
 async def initialize(database_path: str, disabled_tools: str = "") -> None:
-    """Initialisation idempotente : schéma, version, reprise, états d'outils."""
+    """Initialisation idempotente : schéma, migration, version, reprise, états."""
     _ensure_parent(database_path)
     async with open_connection(database_path) as conn:
         for statement in SCHEMA_SQL:
             await conn.execute(statement)
+        await _migrate_analyses_columns(conn)
         await conn.execute(
             "INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('schema_version', ?)",
             (SCHEMA_VERSION,),
@@ -154,6 +171,29 @@ async def initialize(database_path: str, disabled_tools: str = "") -> None:
         await _interrupt_running_analyses(conn)
         await _sync_tool_states(conn, disabled_tools)
         await conn.commit()
+
+
+#: Colonnes ajoutées depuis la v2 (version hackathon), ajoutées sans perte
+#: de données aux bases existantes.
+_ANALYSES_V3_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("owner_session", "TEXT"),
+    ("provider_id", "TEXT"),
+    ("model_id", "TEXT"),
+    ("tool_config_json", "TEXT"),
+)
+
+
+async def _migrate_analyses_columns(conn: aiosqlite.Connection) -> None:
+    """Ajoute les colonnes v3 absentes d'une base v2 (ALTER TABLE ADD COLUMN)."""
+    existing = {
+        row["name"]
+        for row in await (await conn.execute("PRAGMA table_info(analyses)")).fetchall()
+    }
+    for name, column_type in _ANALYSES_V3_COLUMNS:
+        if name not in existing:
+            await conn.execute(
+                f"ALTER TABLE analyses ADD COLUMN {name} {column_type}"
+            )
 
 
 async def _interrupt_running_analyses(conn: aiosqlite.Connection) -> None:
@@ -241,6 +281,19 @@ async def count_active_analyses(conn: aiosqlite.Connection) -> int:
     return int(row["n"]) if row else 0
 
 
+async def count_active_analyses_for_session(
+    conn: aiosqlite.Connection, owner_session: str
+) -> int:
+    """Analyses actives (queued/running) d'UNE session, pour l'isolation."""
+    cursor = await conn.execute(
+        "SELECT COUNT(*) AS n FROM analyses "
+        "WHERE status IN ('queued', 'running') AND owner_session = ?",
+        (owner_session,),
+    )
+    row = await cursor.fetchone()
+    return int(row["n"]) if row else 0
+
+
 async def create_queued_analysis(
     conn: aiosqlite.Connection,
     *,
@@ -250,13 +303,22 @@ async def create_queued_analysis(
     signals: list[str],
     max_active: int,
     queued_ttl_seconds: int,
+    enabled_tools: list[str] | None = None,
+    owner_session: str | None = None,
+    provider_id: str | None = None,
+    model_id: str | None = None,
+    max_active_per_session: int | None = None,
 ) -> list[aiosqlite.Row]:
     """Crée tout l'état initial dans UNE transaction sérialisée.
 
+    `enabled_tools`, quand fourni (recommandé), est la liste EXPLICITE choisie
+    par l'utilisateur : elle fige `analysis_tool_states` pour cette analyse
+    (jamais le registre global). À défaut, la liste globale `tool_states`
+    sert de repli (appels/tests directs).
+
     Le verrou ``BEGIN IMMEDIATE`` rend atomiques le nettoyage des anciennes
-    files, le contrôle de concurrence, l'analyse, le snapshot des outils, le
-    rapport sécurité et ``analysis.created``. Aucun demi-objet ne peut rester
-    en base si une écriture échoue.
+    files, les contrôles de concurrence (global + par session), l'analyse, le
+    snapshot des outils, le rapport sécurité et ``analysis.created``.
     """
     await conn.execute("BEGIN IMMEDIATE")
     try:
@@ -301,10 +363,26 @@ async def create_queued_analysis(
             await conn.commit()
             raise ActiveAnalysisLimitReached(active)
 
+        if owner_session is not None and max_active_per_session is not None:
+            session_active = await count_active_analyses_for_session(
+                conn, owner_session
+            )
+            if session_active >= max_active_per_session:
+                await conn.commit()
+                raise SessionAnalysisLimitReached(session_active)
+
         await conn.execute(
-            "INSERT INTO analyses (id, document, status, created_at) "
-            "VALUES (?, ?, 'queued', ?)",
-            (analysis_id, document, now),
+            "INSERT INTO analyses "
+            "(id, document, status, created_at, owner_session, provider_id, model_id) "
+            "VALUES (?, ?, 'queued', ?, ?, ?, ?)",
+            (
+                analysis_id,
+                document,
+                now,
+                owner_session,
+                provider_id,
+                model_id,
+            ),
         )
         await conn.execute(
             "INSERT INTO analysis_tool_states (analysis_id, tool_name, enabled) "
@@ -312,8 +390,35 @@ async def create_queued_analysis(
             (analysis_id,),
         )
         rows = await list_analysis_tool_states(conn, analysis_id)
-        enabled_tools = [row["tool_name"] for row in rows if row["enabled"]]
-        disabled_tools = [row["tool_name"] for row in rows if not row["enabled"]]
+        enabled_names = [row["tool_name"] for row in rows if row["enabled"]]
+        disabled_names = [row["tool_name"] for row in rows if not row["enabled"]]
+        if enabled_tools is not None:
+            enabled_set = set(enabled_tools)
+            for row in rows:
+                tool_name = row["tool_name"]
+                should_enable = tool_name in enabled_set
+                if bool(row["enabled"]) != should_enable:
+                    await conn.execute(
+                        "UPDATE analysis_tool_states SET enabled = ? "
+                        "WHERE analysis_id = ? AND tool_name = ?",
+                        (1 if should_enable else 0, analysis_id, tool_name),
+                    )
+            rows = await list_analysis_tool_states(conn, analysis_id)
+            enabled_names = [row["tool_name"] for row in rows if row["enabled"]]
+            disabled_names = [row["tool_name"] for row in rows if not row["enabled"]]
+        await conn.execute(
+            "UPDATE analyses SET tool_config_json = ? WHERE id = ?",
+            (
+                json.dumps(
+                    {
+                        "enabled_tools": enabled_names,
+                        "disabled_tools": disabled_names,
+                    },
+                    ensure_ascii=False,
+                ),
+                analysis_id,
+            ),
+        )
         await conn.execute(
             "INSERT INTO analysis_security (analysis_id, signals_json) VALUES (?, ?)",
             (analysis_id, json.dumps(signals, ensure_ascii=False)),
@@ -328,8 +433,8 @@ async def create_queued_analysis(
                     {
                         "analysis_id": analysis_id,
                         "created_at": now,
-                        "enabled_tools": enabled_tools,
-                        "disabled_tools": disabled_tools,
+                        "enabled_tools": enabled_names,
+                        "disabled_tools": disabled_names,
                         "security_signals": signals,
                     },
                     ensure_ascii=False,
@@ -340,6 +445,8 @@ async def create_queued_analysis(
         await conn.commit()
         return rows
     except ActiveAnalysisLimitReached:
+        raise
+    except SessionAnalysisLimitReached:
         raise
     except Exception:
         await conn.rollback()

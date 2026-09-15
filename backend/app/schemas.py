@@ -134,6 +134,17 @@ ToolName = Literal[
 ]
 
 
+class ProviderCredential(BaseModel):
+    """Credential runtime BYOK — transmis au `/start`, JAMAIS persisté.
+
+    Vit uniquement en mémoire dans l'exécution backend concernée et est
+    libéré à la fin de l'analyse."""
+
+    api_key: str = Field(
+        ..., min_length=1, max_length=512, description="Clé API personnelle BYOK."
+    )
+
+
 class AnalysisCreateRequest(BaseModel):
     document: str = Field(
         ...,
@@ -141,8 +152,55 @@ class AnalysisCreateRequest(BaseModel):
         max_length=MAX_DOCUMENT_LENGTH,
         description="Document texte de 1 à 12 000 caractères.",
     )
+    provider_id: str = Field(
+        default="minimax",
+        min_length=1,
+        max_length=64,
+        description="Identifiant du fournisseur (registre contrôlé côté serveur).",
+    )
+    model_id: str | None = Field(
+        None,
+        max_length=128,
+        description="Modèle choisi, ou défaut du fournisseur.",
+    )
+    enabled_tools: list[ToolName] | None = Field(
+        None,
+        description="Outils activés pour CETTE analyse (figés à la création).",
+    )
 
     _document_not_blank = field_validator("document")(_non_blank)
+
+    @field_validator("enabled_tools")
+    @classmethod
+    def enabled_tools_deduplicated(cls, value: list[ToolName] | None) -> list[ToolName] | None:
+        if value is None:
+            return None
+        return list(dict.fromkeys(value))
+
+
+class StartAnalysisRequest(BaseModel):
+    """Démarre l'analyse avec le credential runtime (BYOK), en mémoire."""
+
+    api_key: str | None = Field(
+        None,
+        min_length=1,
+        max_length=512,
+        description="Clé API personnelle, transmise une seule fois au runtime.",
+    )
+
+
+class TestConnectionRequest(BaseModel):
+    provider_id: str = Field(..., min_length=1, max_length=64)
+    model_id: str = Field(..., min_length=1, max_length=128)
+    api_key: str = Field(..., min_length=1, max_length=512)
+
+
+class TestConnectionResponse(BaseModel):
+    provider_id: str
+    model_id: str
+    ok: bool
+    message: str
+    needs_inference: bool = False
 
 
 class ToolConfiguration(BaseModel):
@@ -180,6 +238,8 @@ class AnalysisCreated(BaseModel):
     analysis_id: str = Field(..., description="Identifiant unique UUID de l'analyse.")
     status: AnalysisStatus = Field(..., description="Statut initial de l'analyse (queued).")
     created_at: str = Field(..., description="Date de création ISO-8601 UTC.")
+    provider_id: str = Field(..., description="Fournisseur figé pour l'analyse.")
+    model_id: str = Field(..., description="Modèle figé pour l'analyse.")
     tool_configuration: ToolConfiguration = Field(
         ..., description="Configuration des outils figée pour cette analyse."
     )
@@ -262,6 +322,8 @@ class AnalysisSnapshot(BaseModel):
     started_at: str | None = Field(None, description="Date de démarrage des experts.")
     completed_at: str | None = Field(None, description="Date de fin terminale.")
     error_code: str | None = Field(None, description="Code d'arrêt contrôlé éventuel.")
+    provider_id: str | None = Field(None, description="Fournisseur figé (jamais la clé).")
+    model_id: str | None = Field(None, description="Modèle figé (jamais la clé).")
     avocat: ExpertRunView = Field(..., description="Run de l'Avocat.")
     procureur: ExpertRunView = Field(..., description="Run du Procureur.")
     comptable: ExpertRunView = Field(..., description="Run du Comptable.")
@@ -276,6 +338,35 @@ class AnalysisSnapshot(BaseModel):
     security: SecurityReport = Field(
         ..., description="Signaux repérés dans le document soumis."
     )
+
+
+class ProviderModelInfo(BaseModel):
+    model_id: str = Field(..., description="Identifiant du modèle.")
+    supports_tools: bool = Field(..., description="Capacité d'appel d'outils.")
+    supports_streaming: bool = Field(..., description="Capacité de streaming.")
+    supports_structured_output: bool = Field(
+        ..., description="Capacité de sortie structurée/JSON."
+    )
+    pricing: dict[str, Any] | None = Field(
+        None, description="Tarifs officiels/configurés, ou null."
+    )
+
+
+class ProviderInfo(BaseModel):
+    provider_id: str = Field(..., description="Identifiant stable du fournisseur.")
+    label: str = Field(..., description="Nom affiché.")
+    auth_modes: list[str] = Field(..., description="Modes d'authentification.")
+    supports_tools: bool = Field(..., description="Capacité globale d'outils.")
+    supports_streaming: bool = Field(..., description="Capacité globale de streaming.")
+    supports_structured_output: bool = Field(
+        ..., description="Capacité globale de sortie structurée."
+    )
+    supports_reasoning: bool = Field(..., description="Raisonnement exposé ou non.")
+    models: list[ProviderModelInfo] = Field(..., description="Modèles autorisés.")
+
+
+class ProviderCatalogResponse(BaseModel):
+    providers: list[ProviderInfo] = Field(..., description="Registre public, sans secret.")
 
 
 class ToolState(BaseModel):

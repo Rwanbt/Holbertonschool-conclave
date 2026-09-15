@@ -1,14 +1,19 @@
-"""Boucle agentique générique (Palier 3 & 4) — MiniMax décide, le serveur exécute.
+"""Boucle agentique générique (Palier 3 & 4) — le provider décide, le serveur exécute.
 
 Ce module contient :
 - la boucle générique `run_agent_loop` : envoie les descriptions typées,
-  laisse MiniMax choisir (`tool_choice="auto"`), valide le JSON d'arguments,
+  laisse le provider choisir (`tool_choice="auto"`), valide le JSON d'arguments,
   vérifie l'état SQLite de l'outil au moment de l'exécution, exécute
   l'adaptateur réel, ajoute le résultat `role="tool"` avec le bon
   `tool_call_id`, persiste la trace via un callback, et s'arrête sur une
   sortie finale, une limite ou une répétition ;
 - le wrapper public `run_agent` (Palier 3) qui préserve sa signature et ses
   tests et utilise la même boucle.
+
+La boucle ne connaît AUCUN fournisseur concret : elle travaille sur un
+`ProviderAdapter` (voir providers/) et sur les structures normalisées
+`ProviderResult`/`ProviderChunk`. Les particularités MiniMax (thinking),
+OpenAI, Anthropic ou Gemini restent dans leurs adapters.
 
 Le prompt système et les descriptions d'outils sont recopiés dans AGENTS.md :
 toute modification ici doit y être répercutée.
@@ -23,7 +28,7 @@ from typing import Any, Awaitable, Callable
 
 from . import toolkit
 from .config import Settings, get_settings
-from .llm import ProviderError, build_client
+from .providers import ProviderError, build_provider
 from .schemas import AgentResponse, ExecutionUsage, ToolTraceEntry
 from .streaming import LiveSinkError, stream_chat_completion
 
@@ -122,6 +127,10 @@ async def run_agent_loop(
     allowed_tools: frozenset[str] | None = None,
     round_event_sink: RoundEventSink | None = None,
     required_tools_before_final: frozenset[str] = frozenset(),
+    provider: Any | None = None,
+    provider_id: str = "minimax",
+    model: str | None = None,
+    api_key: str | None = None,
 ) -> AgentLoopResult:
     """Boucle générique bornée. `get_connection` alimente l'état SQLite des outils
     (repli Palier 3 quand `allowed_tools` n'est pas fourni).
@@ -173,8 +182,8 @@ async def run_agent_loop(
         if completion.usage is None:
             return
         any_usage = True
-        total_input += completion.usage.prompt_tokens or 0
-        total_output += completion.usage.completion_tokens or 0
+        total_input += completion.usage.input_tokens or 0
+        total_output += completion.usage.output_tokens or 0
         total_tokens += completion.usage.total_tokens or 0
 
     async def emit_round_completed(
@@ -197,8 +206,16 @@ async def run_agent_loop(
                 payload,
             )
 
-    async with build_client(settings) as client:
-        # Boucle visible et montrable : chaque round est un appel MiniMax.
+    created_provider = provider is None
+    if provider is None:
+        provider = build_provider(
+            provider_id=provider_id,
+            model_id=model or settings.minimax_model,
+            api_key=api_key,
+            settings=settings,
+        )
+    try:
+        # Boucle visible et montrable : chaque round est un appel provider.
         for round_number in range(1, max_rounds + 1):
             if round_event_sink is not None:
                 await round_event_sink(
@@ -210,8 +227,7 @@ async def run_agent_loop(
             async def _call(msgs: list[dict[str, Any]]):
                 if stream_final_envelope:
                     return await stream_chat_completion(
-                        client,
-                        model=settings.minimax_model,
+                        provider,
                         messages=msgs,
                         max_completion_tokens=output_budget,
                         temperature=0.3,
@@ -222,18 +238,15 @@ async def run_agent_loop(
                         live_sink=response_event_sink,
                         response_role=agent_role,
                     )
-                kwargs: dict[str, Any] = {
-                    "model": settings.minimax_model,
-                    "messages": msgs,
-                    "max_completion_tokens": output_budget,
-                    "temperature": 0.3,
-                    "n": 1,
-                    "extra_body": {"thinking": {"type": "disabled"}},
-                }
-                if tool_schemas:
-                    kwargs["tools"] = tool_schemas
-                    kwargs["tool_choice"] = "auto"
-                return await client.chat.completions.create(**kwargs)
+                return await provider.complete(
+                    messages=msgs,
+                    max_output_tokens=output_budget,
+                    temperature=0.3,
+                    n=1,
+                    tools=tool_schemas,
+                    tool_choice="auto" if tool_schemas else None,
+                    response_format=None,
+                )
 
             try:
                 completion = await _call(messages)
@@ -613,6 +626,9 @@ async def run_agent_loop(
 
             if stop:
                 break
+    finally:
+        if created_provider:
+            await provider.close()
 
     usage = ExecutionUsage(
         input_tokens=total_input if any_usage else None,
@@ -659,9 +675,18 @@ def _append_trace_error(
 
 
 async def run_agent(
-    instruction: str, document: str, settings: Settings | None = None
+    instruction: str,
+    document: str,
+    settings: Settings | None = None,
+    *,
+    provider_id: str = "minimax",
+    model: str | None = None,
+    api_key: str | None = None,
 ) -> AgentResponse:
-    """Wrapper Palier 3 — signature publique et tests préservés."""
+    """Wrapper Palier 3 — signature publique et tests préservés.
+
+    `api_key` (BYOK) a priorité ; à défaut le credential serveur n'est
+    utilisé que si `allow_server_provider_credentials` le permet."""
     current = settings if settings is not None else get_settings()
     session = AgentSession(document=document)
     result = await run_agent_loop(
@@ -674,6 +699,9 @@ async def run_agent(
         max_rounds=max(1, current.minimax_max_tool_rounds),
         agent_role="assistant",
         get_connection=None,
+        provider_id=provider_id,
+        model=model,
+        api_key=api_key,
     )
     if result.answer is None:
         if result.rounds >= max(1, current.minimax_max_tool_rounds):
@@ -690,7 +718,7 @@ async def run_agent(
         answer = result.answer
     return AgentResponse(
         answer=answer,
-        model=current.minimax_model,
+        model=model or current.minimax_model,
         trace=result.trace,
         usage=result.usage,
     )

@@ -34,6 +34,7 @@ from backend.app.streaming import (
 )
 
 from .conftest import (
+    to_provider_chunk,
     FakeChoice,
     FakeClient,
     FakeCompletion,
@@ -189,7 +190,9 @@ class TestStreamCollector:
 
         async def go() -> None:
             await collector.feed(
-                FakeStreamChunk(content="<LIVE_RESPONSE>petit</LIVE_RESPONSE>")
+                to_provider_chunk(
+                    FakeStreamChunk(content="<LIVE_RESPONSE>petit</LIVE_RESPONSE>")
+                )
             )
             await asyncio.sleep(0.08)
             await collector.finish()
@@ -199,19 +202,31 @@ class TestStreamCollector:
 
     def test_usage_chunk_without_choices_is_kept(self) -> None:
         collector = StreamCollector(_settings())
-        _run_async(collector.feed(FakeStreamChunk(content="bonjour", finish_reason="stop")))
-        _run_async(collector.feed(FakeStreamChunk(usage=FakeUsage(10, 5))))
+        _run_async(
+            collector.feed(
+                to_provider_chunk(
+                    FakeStreamChunk(content="bonjour", finish_reason="stop")
+                )
+            )
+        )
+        _run_async(
+            collector.feed(to_provider_chunk(FakeStreamChunk(usage=FakeUsage(10, 5))))
+        )
         completion = _run_async(collector.finish())
         assert completion.usage is not None
-        assert completion.usage.prompt_tokens == 10
-        assert completion.usage.completion_tokens == 5
+        assert completion.usage.input_tokens == 10
+        assert completion.usage.output_tokens == 5
         assert completion.choices[0].message.content == "bonjour"
 
     def test_cumulative_content_is_deduplicated(self) -> None:
         collector = StreamCollector(_settings())
-        _run_async(collector.feed(FakeStreamChunk(content="Bon")))
-        _run_async(collector.feed(FakeStreamChunk(content="Bonjour")))
-        _run_async(collector.feed(FakeStreamChunk(content="Bonjour")))
+        _run_async(collector.feed(to_provider_chunk(FakeStreamChunk(content="Bon"))))
+        _run_async(
+            collector.feed(to_provider_chunk(FakeStreamChunk(content="Bonjour")))
+        )
+        _run_async(
+            collector.feed(to_provider_chunk(FakeStreamChunk(content="Bonjour")))
+        )
         completion = _run_async(collector.finish())
         assert completion.choices[0].message.content == "Bonjour"
 
@@ -219,15 +234,29 @@ class TestStreamCollector:
         collector = StreamCollector(_settings())
         _run_async(
             collector.feed(
-                FakeStreamChunk(
-                    tool_calls=[FakeStreamToolCall(0, call_id="c1", name="measure_", arguments='{"a')],
-                    finish_reason="tool_calls",
+                to_provider_chunk(
+                    FakeStreamChunk(
+                        tool_calls=[
+                            FakeStreamToolCall(
+                                0, call_id="c1", name="measure_", arguments='{"a'
+                            )
+                        ],
+                        finish_reason="tool_calls",
+                    )
                 )
             )
         )
         _run_async(
             collector.feed(
-                FakeStreamChunk(tool_calls=[FakeStreamToolCall(0, name="current_document", arguments="}")])
+                to_provider_chunk(
+                    FakeStreamChunk(
+                        tool_calls=[
+                            FakeStreamToolCall(
+                                0, name="current_document", arguments="}"
+                            )
+                        ]
+                    )
+                )
             )
         )
         completion = _run_async(collector.finish())
@@ -238,10 +267,26 @@ class TestStreamCollector:
 
     def test_hybrid_live_and_tool_calls_keeps_the_tool_call(self) -> None:
         collector = StreamCollector(_settings())
-        _run_async(collector.feed(FakeStreamChunk(content="<LIVE_RESPONSE>t</LIVE_RESPONSE>")))
         _run_async(
             collector.feed(
-                FakeStreamChunk(tool_calls=[FakeStreamToolCall(0, call_id="c", name="measure_current_document")])
+                to_provider_chunk(
+                    FakeStreamChunk(content="<LIVE_RESPONSE>t</LIVE_RESPONSE>")
+                )
+            )
+        )
+        _run_async(
+            collector.feed(
+                to_provider_chunk(
+                    FakeStreamChunk(
+                        tool_calls=[
+                            FakeStreamToolCall(
+                                0,
+                                call_id="c",
+                                name="measure_current_document",
+                            )
+                        ]
+                    )
+                )
             )
         )
         completion = _run_async(collector.finish())
@@ -253,12 +298,14 @@ class TestStreamCollector:
         collector = StreamCollector(_settings())
         _run_async(
             collector.feed(
-                FakeStreamChunk(
-                    content=(
-                        "<LIVE_RESPONSE>Conclusion courte</LIVE_RESPONSE>"
-                        "<FINAL_JSON>{\"role\":\"avocat\""
-                    ),
-                    finish_reason="length",
+                to_provider_chunk(
+                    FakeStreamChunk(
+                        content=(
+                            "<LIVE_RESPONSE>Conclusion courte</LIVE_RESPONSE>"
+                            "<FINAL_JSON>{\"role\":\"avocat\""
+                        ),
+                        finish_reason="length",
+                    )
                 )
             )
         )
@@ -275,9 +322,11 @@ class TestStreamCollector:
         collector = StreamCollector(settings, live_sink=sink, response_role="avocat")
         _run_async(
             collector.feed(
-                FakeStreamChunk(
-                    content="<LIVE_RESPONSE>Bonjour le monde et la suite du raisonnement</LIVE_RESPONSE>"
-                    "<FINAL_JSON>{}</FINAL_JSON>"
+                to_provider_chunk(
+                    FakeStreamChunk(
+                        content="<LIVE_RESPONSE>Bonjour le monde et la suite du raisonnement</LIVE_RESPONSE>"
+                        "<FINAL_JSON>{}</FINAL_JSON>"
+                    )
                 )
             )
         )
@@ -292,7 +341,7 @@ class TestStreamCollector:
 class TestAgentLoopStreaming:
     def _patched_loop(self, monkeypatch, stream, max_rounds=2, repairs=None):
         client = FakeClient({"avocat": stream}, repairs=repairs)
-        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
         events: list[tuple[str, dict]] = []
 
         async def sink(kind: str, fields: dict) -> None:
@@ -349,7 +398,9 @@ class TestAgentLoopStreaming:
         with pytest.raises(LiveSinkError):
             _run_async(
                 collector.feed(
-                    FakeStreamChunk(content="<LIVE_RESPONSE>début")
+                    to_provider_chunk(
+                        FakeStreamChunk(content="<LIVE_RESPONSE>début")
+                    )
                 )
             )
 
@@ -469,7 +520,7 @@ class TestAgentLoopStreaming:
                 )
             }
         )
-        monkeypatch.setattr(agent, "build_client", lambda _settings: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
 
         result = _run_async(
             agent.run_agent_loop(
@@ -490,8 +541,8 @@ class TestAgentLoopStreaming:
         )
 
         assert result.answer is not None
-        assert "tools" not in client.created_kwargs[0]
-        assert "tool_choice" not in client.created_kwargs[0]
+        assert not client.created_kwargs[0].get("tools")
+        assert not client.created_kwargs[0].get("tool_choice")
 
     def test_final_json_only_round_without_live_fails_after_failed_repair(
         self, monkeypatch
@@ -516,8 +567,8 @@ class TestResponseEventsPersisted:
             ]
         )
         client = FakeClient({"avocat": stream})
-        monkeypatch.setattr(experts, "build_client", lambda settings: client)
-        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+        monkeypatch.setattr(experts, "build_provider", lambda **kwargs: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
 
         async def go():
             await db.initialize(settings.database_path, "")
@@ -559,8 +610,8 @@ class TestResponseEventsPersisted:
             {"avocat": stream},
             repairs=[FakeCompletion([FakeChoice(FakeMessage(content="toujours invalide"))])],
         )
-        monkeypatch.setattr(experts, "build_client", lambda settings: client)
-        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+        monkeypatch.setattr(experts, "build_provider", lambda **kwargs: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
 
         async def go():
             await db.initialize(settings.database_path, "")
@@ -607,8 +658,8 @@ class TestResponseEventsPersisted:
             usage=FakeUsage(12, 8),
         )
         client = FakeClient({"avocat": stream}, repairs=[repair])
-        monkeypatch.setattr(experts, "build_client", lambda settings: client)
-        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+        monkeypatch.setattr(experts, "build_provider", lambda **kwargs: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
 
         async def go():
             await db.initialize(settings.database_path, "")
@@ -629,8 +680,8 @@ class TestResponseEventsPersisted:
         assert result.error_code is None
         repair_kwargs = client.created_kwargs[-1]
         assert repair_kwargs.get("stream") is not True
-        assert "tools" not in repair_kwargs
-        assert "tool_choice" not in repair_kwargs
+        assert not repair_kwargs.get("tools")
+        assert not repair_kwargs.get("tool_choice")
         assert repair_kwargs["temperature"] == 0.0
         assert repair_kwargs["response_format"] == {"type": "json_object"}
         assert "normalisateur JSON déterministe" in repair_kwargs["messages"][0]["content"]
@@ -661,8 +712,8 @@ class TestResponseEventsPersisted:
                 ),
             ],
         )
-        monkeypatch.setattr(experts, "build_client", lambda settings: client)
-        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+        monkeypatch.setattr(experts, "build_provider", lambda **kwargs: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
 
         async def go():
             await db.initialize(settings.database_path, "")
@@ -736,8 +787,8 @@ class TestReplayAndToolsList:
             ),
         }
         client = FakeClient(scripts)
-        monkeypatch.setattr(experts, "build_client", lambda settings: client)
-        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+        monkeypatch.setattr(experts, "build_provider", lambda **kwargs: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
 
         async def go():
             await db.initialize(settings.database_path, "")

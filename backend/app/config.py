@@ -29,6 +29,31 @@ class Settings(BaseSettings):
     minimax_model: str = "MiniMax-M3"
     minimax_max_output_tokens: int = 300
     frontend_origin: str = "http://localhost:5173"
+    frontend_origins: str = "http://localhost:5173"
+
+    # Clés serveur DEV/SMOKE uniquement : désactivées par défaut en
+    # production. `ALLOW_SERVER_PROVIDER_CREDENTIALS=false` garantit qu'aucun
+    # fallback silencieux vers la clé du propriétaire ne se produit.
+    openai_api_key: str = ""
+    anthropic_api_key: str = ""
+    gemini_api_key: str = ""
+    allow_server_provider_credentials: bool = False
+
+    # Secret de signature des cookies de session anonyme. Si vide, une clé
+    # aléatoire par processus est utilisée (sessions invalidées au restart —
+    # comportement documenté et acceptable).
+    session_cookie_secret: str = ""
+    session_cookie_name: str = "conclave_session"
+    session_max_age_days: int = 30
+
+    # Plafonds par session (isolation multi-utilisateur) : un utilisateur ne
+    # doit pas pouvoir monopoliser les places de concurrence.
+    max_analyses_per_session: int = Field(
+        5,
+        ge=1,
+        le=200,
+        description="Nombre maximal d'analyses actives (queued ou running) par session.",
+    )
 
     minimax_max_tool_rounds: int = Field(
         3, ge=1, description="Nombre maximal d'appels MiniMax dans la boucle agent."

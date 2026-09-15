@@ -1,12 +1,13 @@
-"""Fixtures partagées des tests Palier 4.
+"""Fixtures partagées des tests Palier 4 + multi-provider.
 
-Le faux client MiniMax est scripté PAR RÔLE (avocat / procureur / comptable /
+Le faux provider est scripté PAR RÔLE (avocat / procureur / comptable /
 arbitre) : chaque expert consomme sa propre file de réponses, ce qui rend les
 trois `asyncio.gather` déterministes. La détection du rôle se fait sur le
 prompt système. Les appels de réparation (« Ta réponse n'est pas valide »)
 consomment une file `repairs` dédiée.
 
-Aucun réseau, aucune clé, aucun coût : uniquement des scripts en mémoire.
+Il implémente l'interface `ProviderAdapter` (complete/stream_chat) : aucun
+réseau, aucune clé, aucun coût — uniquement des scripts en mémoire.
 """
 
 from __future__ import annotations
@@ -16,6 +17,15 @@ from typing import Any
 import pytest
 
 from backend.app import agent, experts
+from backend.app.providers.types import (
+    ProviderChunk,
+    ProviderChoice,
+    ProviderMessage,
+    ProviderResult,
+    ProviderToolCall,
+    ProviderToolCallDelta,
+    ProviderUsage,
+)
 
 
 class FakeFunction:
@@ -31,7 +41,7 @@ class FakeToolCall:
 
 
 class _Hang(Exception):
-    """Sentinel : l'appel MiniMax ne répond jamais (test des garde-fous de temps)."""
+    """Sentinel : l'appel provider ne répond jamais (test des garde-fous de temps)."""
 
 
 HANG: object = object()
@@ -77,11 +87,12 @@ class FakeStreamToolCall:
     def __init__(self, index, call_id=None, name=None, arguments=None):
         self.index = index
         self.id = call_id
-        self.function = FakeFunction(name or "", arguments or "")
+        self.name = name
+        self.arguments = arguments
 
 
 class FakeStreamChunk:
-    """Morceau de stream OpenAI : `content`/`tool_calls` dans le delta + usage."""
+    """Morceau de stream : `content`/`tool_calls` dans le delta + usage."""
 
     def __init__(self, content=None, tool_calls=None, usage=None, finish_reason=None):
         self.choices = []
@@ -108,11 +119,7 @@ class FakeStream:
 
 
 def _completion_to_stream(completion: FakeCompletion) -> FakeStream:
-    """Convertit une réponse non-streamée en stream d'un seul morceau.
-
-    La réponse est reconstituée à l'identique : contenu (enveloppe) et appels
-    d'outil par index, puis un chunk final `choices=[]` porteur de l'usage.
-    """
+    """Convertit une réponse non-streamée en stream d'un seul morceau."""
     chunks: list[FakeStreamChunk] = []
     if completion.choices:
         message = completion.choices[0].message
@@ -144,15 +151,83 @@ def _completion_to_stream(completion: FakeCompletion) -> FakeStream:
     return FakeStream(chunks)
 
 
+def _completion_to_result(completion: FakeCompletion) -> ProviderResult:
+    choices: list[ProviderChoice] = []
+    for choice in completion.choices:
+        message = choice.message
+        tool_calls: list[ProviderToolCall] = []
+        for call in message.tool_calls or []:
+            tool_calls.append(
+                ProviderToolCall(
+                    id=call.id,
+                    name=call.function.name,
+                    arguments=call.function.arguments,
+                )
+            )
+        choices.append(
+            ProviderChoice(
+                message=ProviderMessage(
+                    content=message.content, tool_calls=tool_calls or None
+                ),
+                finish_reason=None,
+            )
+        )
+    usage: ProviderUsage | None = None
+    if completion.usage is not None:
+        usage = ProviderUsage(
+            input_tokens=completion.usage.prompt_tokens,
+            output_tokens=completion.usage.completion_tokens,
+            total_tokens=completion.usage.total_tokens,
+        )
+    return ProviderResult(choices=choices, usage=usage)
+
+
+def _chunk_to_provider(fchunk: FakeStreamChunk) -> ProviderChunk:
+    content_delta = ""
+    finish_reason: str | None = None
+    raw_tool_calls = None
+    if fchunk.choices:
+        delta = fchunk.choices[0].delta
+        content_delta = delta.content or ""
+        finish_reason = fchunk.choices[0].finish_reason
+        raw_tool_calls = delta.tool_calls
+    tool_calls: list[ProviderToolCallDelta] | None = None
+    if raw_tool_calls:
+        tool_calls = [
+            ProviderToolCallDelta(
+                index=tool.index,
+                id=tool.id,
+                name=tool.name,
+                arguments=tool.arguments,
+            )
+            for tool in raw_tool_calls
+        ]
+    usage: ProviderUsage | None = None
+    if fchunk.usage is not None:
+        usage = ProviderUsage(
+            input_tokens=fchunk.usage.prompt_tokens,
+            output_tokens=fchunk.usage.completion_tokens,
+            total_tokens=fchunk.usage.total_tokens,
+        )
+    return ProviderChunk(
+        content_delta=content_delta,
+        tool_calls=tool_calls,
+        finish_reason=finish_reason,
+        usage=usage,
+    )
+
+
 class FakeClient:
-    """Client scripté par rôle avec support des réparations et du streaming."""
+    """Provider scripté par rôle avec support des réparations et du streaming.
+
+    Implémente l'interface `ProviderAdapter` : `complete` (non streamé) et
+    `stream_chat` (générateur async de `ProviderChunk`)."""
 
     def __init__(
         self,
         scripts: dict[str, list[FakeCompletion] | FakeStream],
         repairs: list[FakeCompletion] | None = None,
     ):
-        self.chat = _FakeChat(self)
         self._scripts = {
             key: list(value) if isinstance(value, (list, tuple)) else [value]
             for key, value in scripts.items()
@@ -160,6 +235,9 @@ class FakeClient:
         self._repairs = list(repairs or [])
         self.created_messages: list[list[dict[str, Any]]] = []
         self.created_kwargs: list[dict[str, Any]] = []
+
+    async def close(self) -> None:
+        return None
 
     async def __aenter__(self):
         return self
@@ -179,7 +257,7 @@ class FakeClient:
             return "comptable"
         raise AssertionError("unknown role in system prompt")
 
-    def next_response(self, messages: list[dict[str, Any]]) -> FakeCompletion:
+    def next_response(self, messages: list[dict[str, Any]]):
         self.created_messages.append(messages)
         last = messages[-1] if messages else {}
         if last.get("role") == "user" and str(last.get("content", "")).startswith(
@@ -200,33 +278,53 @@ class FakeClient:
             raise _Hang()
         return response
 
-
-class _FakeCompletions:
-    def __init__(self, owner: FakeClient):
-        self._owner = owner
-
-    async def create(self, **kwargs):
+    async def complete(self, **kwargs):
         messages = kwargs.get("messages", [])
-        self._owner.created_kwargs.append(kwargs)
+        self.created_kwargs.append(kwargs)
         try:
-            response = self._owner.next_response(messages)
+            response = self.next_response(messages)
         except _Hang:
             import asyncio
 
             await asyncio.sleep(3600)
             raise AssertionError("unreachable")
-        if kwargs.get("stream", False) and isinstance(response, FakeCompletion):
-            return _completion_to_stream(response)
-        return response
+        if not isinstance(response, FakeCompletion):
+            raise AssertionError(
+                "complete() expected a FakeCompletion (got a stream)"
+            )
+        return _completion_to_result(response)
+
+    async def stream_chat(self, **kwargs):
+        messages = kwargs.get("messages", [])
+        self.created_kwargs.append(kwargs)
+        try:
+            response = self.next_response(messages)
+        except _Hang:
+            import asyncio
+
+            await asyncio.sleep(3600)
+            return
+        if isinstance(response, FakeStream):
+            for chunk in _stream_to_provider_chunks(response):
+                yield chunk
+        elif isinstance(response, FakeCompletion):
+            for chunk in _stream_to_provider_chunks(_completion_to_stream(response)):
+                yield chunk
+        else:
+            raise AssertionError("stream_chat expected a FakeStream response")
 
 
-class _FakeChat:
-    def __init__(self, owner: FakeClient):
-        self.completions = _FakeCompletions(owner)
+def _stream_to_provider_chunks(stream: FakeStream) -> list[ProviderChunk]:
+    return [_chunk_to_provider(chunk) for chunk in stream._chunks]
+
+
+def to_provider_chunk(fchunk: FakeStreamChunk) -> ProviderChunk:
+    """Convertisseur public utilisé par les tests du StreamCollector."""
+    return _chunk_to_provider(fchunk)
 
 
 def fake_client_factory(client: FakeClient):
-    def _factory(_settings=None):
+    def _factory(**kwargs):
         return client
 
     return _factory
@@ -234,11 +332,11 @@ def fake_client_factory(client: FakeClient):
 
 @pytest.fixture
 def patch_minimax(monkeypatch):
-    """Patche `build_client` dans agent et experts pour la durée du test."""
+    """Patche `build_provider` dans agent et experts pour la durée du test."""
 
     def _patch(client: FakeClient) -> None:
-        monkeypatch.setattr(agent, "build_client", fake_client_factory(client))
-        monkeypatch.setattr(experts, "build_client", fake_client_factory(client))
+        monkeypatch.setattr(agent, "build_provider", fake_client_factory(client))
+        monkeypatch.setattr(experts, "build_provider", fake_client_factory(client))
 
     return _patch
 

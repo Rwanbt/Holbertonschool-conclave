@@ -137,7 +137,7 @@ class TestFullHappyPath:
             if role is None or role in schemas_by_role:
                 continue
             schemas_by_role[role] = {
-                schema["function"]["name"] for schema in kwargs.get("tools", [])
+                schema["function"]["name"] for schema in (kwargs.get("tools") or [])
             }
 
         assert schemas_by_role == {
