@@ -213,3 +213,35 @@ def create_adapter(
             f"Modèle {model_id} non autorisé pour le fournisseur {provider_id}.",
         )
     return entry.factory(api_key, model_id)
+
+
+def provider_pricing(
+    settings: Any, provider_id: str, model_id: str
+) -> dict[str, Any] | None:
+    """Tarifs officiels/configurés du modèle choisi, ou None.
+
+    - MiniMax : les tarifs sont CONFIGURABLES dans les settings (DEV), sinon
+      les tarifs officiels du registre font foi ; 0.0 = non configuré -> None.
+    - OpenAI/Anthropic/Gemini : tarifs officiels du registre (ModelEntry).
+    - Aucun tarif connu -> None : le coût reste `null` et n'empêche jamais une
+      analyse (philosophie CONCLAVE).
+    """
+    if provider_id == "minimax":
+        input_price = getattr(settings, "minimax_input_usd_per_million", 0.0)
+        output_price = getattr(settings, "minimax_output_usd_per_million", 0.0)
+        if input_price and output_price and input_price > 0 and output_price > 0:
+            return {
+                "model_name": model_id,
+                "input_usd_per_million_tokens": input_price,
+                "output_usd_per_million_tokens": output_price,
+            }
+        return None
+    entry = model_entry(provider_id, model_id)
+    if entry is None or not entry.pricing:
+        return None
+    price = entry.pricing
+    return {
+        "model_name": model_id,
+        "input_usd_per_million_tokens": price.get("input_usd_per_million_tokens"),
+        "output_usd_per_million_tokens": price.get("output_usd_per_million_tokens"),
+    }

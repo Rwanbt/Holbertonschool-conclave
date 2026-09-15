@@ -35,7 +35,7 @@ from pydantic import ValidationError
 from . import db, security, toolkit
 from .agent import AgentLoopResult, AgentSession, run_agent_loop
 from .config import Settings
-from .providers import ProviderError, build_provider
+from .providers import ProviderError, build_provider, provider_pricing
 from .schemas import (
     AgentOutput,
     AgentResponseCompleted,
@@ -360,6 +360,7 @@ async def _repair_structured_output(
     schema: dict[str, Any],
     schema_name: str,
     max_output_tokens: int | None = None,
+    pricing: dict[str, Any] | None = None,
 ) -> tuple[str | None, ExecutionUsage]:
     """Une seule tentative de réparation : nouvel appel provider sans outils."""
     output_budget = max_output_tokens or settings.minimax_max_output_tokens
@@ -414,7 +415,7 @@ async def _repair_structured_output(
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         estimated_cost_usd=(
-            toolkit.estimated_cost_usd(settings, input_tokens or 0, output_tokens or 0)
+            toolkit.estimated_cost_usd(pricing, input_tokens or 0, output_tokens or 0)
             if raw_usage is not None
             else None
         ),
@@ -455,6 +456,8 @@ async def run_expert(
     """
     run_id = uuid.uuid4().hex
     started_at = db.utc_now_iso()
+    resolved_model = model or settings.minimax_model
+    pricing = provider_pricing(settings, provider_id, resolved_model)
 
     async def emit(event_type: str, payload: dict[str, Any]) -> None:
         async with (await get_connection()) as conn:
@@ -597,6 +600,7 @@ async def run_expert(
             provider_id=provider_id,
             model=model,
             api_key=api_key,
+            pricing=pricing,
         )
 
     async def fail_run(
@@ -735,10 +739,11 @@ async def run_expert(
                         messages,
                         settings,
                         repair_hint,
-                        AgentOutput.model_json_schema(),
-                        "AgentOutput",
-                        max_output_tokens=settings.expert_max_output_tokens,
-                    )
+AgentOutput.model_json_schema(),
+                            "AgentOutput",
+                            max_output_tokens=settings.expert_max_output_tokens,
+                            pricing=pricing,
+                        )
                     run_usage = _merge_usage([run_usage, repair_usage])
                     repaired_data = (
                         extract_structured_json(repaired) if repaired else None
@@ -871,6 +876,9 @@ async def run_arbiter(
     api_key: str | None = None,
 ) -> tuple[ArbiterVerdict | None, ExecutionUsage, str | None]:
     """Arbitre : reçoit document + sorties validées, rend un verdict JSON validé."""
+    resolved_model = model or settings.minimax_model
+    pricing = provider_pricing(settings, provider_id, resolved_model)
+
     async def emit(event_type: str, payload: dict[str, Any]) -> None:
         async with (await get_connection()) as conn:
             await db.insert_analysis_event(
@@ -996,6 +1004,7 @@ async def run_arbiter(
             provider_id=provider_id,
             model=model,
             api_key=api_key,
+            pricing=pricing,
         )
 
     async def fail_arbiter(
@@ -1085,6 +1094,7 @@ async def run_arbiter(
                         ArbiterVerdict.model_json_schema(),
                         "ArbiterVerdict",
                         max_output_tokens=settings.expert_max_output_tokens,
+                        pricing=pricing,
                     )
                     arbiter_usage = _merge_usage([arbiter_usage, repair_usage])
                     repaired_data = (
@@ -1183,6 +1193,11 @@ async def run_analysis(
     validé le credential).
     """
     session = AgentSession(document=document)
+    session.provider_id = provider_id
+    session.model_id = model or settings.minimax_model
+    session.pricing = provider_pricing(
+        settings, provider_id, model or settings.minimax_model
+    )
     # Nonce régénéré à chaque analyse : le document ne peut pas deviner la
     # borne fermante de sa propre zone de données pour reprendre la main.
     document_nonce = security.new_document_nonce()

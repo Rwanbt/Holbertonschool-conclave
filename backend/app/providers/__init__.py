@@ -19,6 +19,7 @@ from .registry import (
     create_adapter,
     list_provider_specs,
     model_entry,
+    provider_pricing,
 )
 from .types import (
     ProviderChunk,
@@ -48,6 +49,7 @@ __all__ = [
     "create_adapter",
     "list_provider_specs",
     "model_entry",
+    "provider_pricing",
 ]
 
 

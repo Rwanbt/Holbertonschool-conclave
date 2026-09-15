@@ -28,7 +28,7 @@ from typing import Any, Awaitable, Callable
 
 from . import toolkit
 from .config import Settings, get_settings
-from .providers import ProviderError, build_provider
+from .providers import ProviderError, build_provider, provider_pricing
 from .schemas import AgentResponse, ExecutionUsage, ToolTraceEntry
 from .streaming import LiveSinkError, stream_chat_completion
 
@@ -131,6 +131,7 @@ async def run_agent_loop(
     provider_id: str = "minimax",
     model: str | None = None,
     api_key: str | None = None,
+    pricing: dict[str, Any] | None = None,
 ) -> AgentLoopResult:
     """Boucle générique bornée. `get_connection` alimente l'état SQLite des outils
     (repli Palier 3 quand `allowed_tools` n'est pas fourni).
@@ -213,6 +214,10 @@ async def run_agent_loop(
             model_id=model or settings.minimax_model,
             api_key=api_key,
             settings=settings,
+        )
+    if pricing is None:
+        pricing = provider_pricing(
+            settings, provider_id, model or settings.minimax_model
         )
     try:
         # Boucle visible et montrable : chaque round est un appel provider.
@@ -635,7 +640,7 @@ async def run_agent_loop(
         output_tokens=total_output if any_usage else None,
         total_tokens=total_tokens if any_usage else None,
         estimated_cost_usd=(
-            toolkit.estimated_cost_usd(settings, total_input, total_output)
+            toolkit.estimated_cost_usd(pricing, total_input, total_output)
             if any_usage
             else None
         ),
@@ -689,6 +694,11 @@ async def run_agent(
     utilisé que si `allow_server_provider_credentials` le permet."""
     current = settings if settings is not None else get_settings()
     session = AgentSession(document=document)
+    session.provider_id = provider_id
+    session.model_id = model or current.minimax_model
+    session.pricing = provider_pricing(
+        current, provider_id, model or current.minimax_model
+    )
     result = await run_agent_loop(
         [
             {"role": "system", "content": SYSTEM_PROMPT},

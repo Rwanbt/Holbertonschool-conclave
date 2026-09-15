@@ -1,7 +1,7 @@
-.PHONY: eval test lint build all
+.PHONY: eval test lint build secrets all
 
 ## Rejoue le jeu d'évaluation (eval/cases.md) et sort un score chiffré.
-## Aucune clé MiniMax nécessaire : le fournisseur est simulé.
+## Aucune clé fournisseur nécessaire : le fournisseur est simulé.
 eval:
 	python3 eval/run_eval.py
 
@@ -16,4 +16,8 @@ lint:
 build:
 	cd frontend && npm run build
 
-all: test lint build eval
+## Contrôle anti-fuite de secrets (bundle + base SQLite).
+secrets:
+	./scripts/check-no-secrets.sh
+
+all: test lint build eval secrets

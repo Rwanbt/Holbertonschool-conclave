@@ -213,3 +213,22 @@ un outil qui possède un nouvel effet de bord impose de mettre à jour ce
 fichier, le schéma d'architecture et le hors-scope avant l'implémentation.
 Ajouter un outil SANS effet de bord impose au minimum de mettre à jour ce
 fichier, le registre (`toolkit.py`), les descriptions exposées et AGENTS.md.
+
+---
+
+## Scope des outils : PAR ANALYSE, jamais global
+
+Depuis la version production (v1.1), la configuration des outils n'est **plus**
+un registre global public modifiable par n'importe quel visiteur :
+
+1. `GET /api/tools` renvoie le catalogue et les **préférences de CETTE session**
+   (`session_tool_states`) — jamais celles d'un autre utilisateur.
+2. Le frontend envoie explicitement `enabled_tools` à la création de l'analyse
+   (`POST /api/analyses`).
+3. Le backend valide cette liste contre le catalogue, crée
+   `analysis_tool_states` et **fige** la configuration : une analyse déjà créée
+   reste immuable, même si les préférences changent ensuite.
+4. La commande avancée `/tools enable|disable` modifie uniquement les
+   préférences de la session courante.
+
+`DISABLED_TOOLS` ne sert qu'à l'état initial d'une base neuve.

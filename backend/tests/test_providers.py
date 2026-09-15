@@ -133,6 +133,42 @@ class TestBuildProvider:
         assert provider is not None
 
 
+class TestProviderPricing:
+    def test_minimax_pricing_from_settings(self) -> None:
+        from backend.app.providers import provider_pricing
+
+        settings = Settings(
+            minimax_input_usd_per_million=0.30,
+            minimax_output_usd_per_million=1.20,
+        )
+        pricing = provider_pricing(settings, "minimax", "MiniMax-M3")
+        assert pricing["input_usd_per_million_tokens"] == 0.30
+        assert pricing["output_usd_per_million_tokens"] == 1.20
+
+    def test_zero_minimax_pricing_is_null(self) -> None:
+        from backend.app.providers import provider_pricing
+
+        settings = Settings(
+            minimax_input_usd_per_million=0.0,
+            minimax_output_usd_per_million=0.0,
+        )
+        assert provider_pricing(settings, "minimax", "MiniMax-M3") is None
+
+    def test_openai_pricing_from_registry(self) -> None:
+        from backend.app.providers import provider_pricing
+
+        settings = Settings()
+        pricing = provider_pricing(settings, "openai", "gpt-4o-mini")
+        assert pricing is not None
+        assert pricing["input_usd_per_million_tokens"] == 0.15
+
+    def test_unknown_model_pricing_is_null(self) -> None:
+        from backend.app.providers import provider_pricing
+
+        settings = Settings()
+        assert provider_pricing(settings, "openai", "does-not-exist") is None
+
+
 # ---------------------------------------------------------------------------
 # OpenAI-compatible — normalisation et erreurs
 # ---------------------------------------------------------------------------
