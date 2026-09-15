@@ -1,9 +1,15 @@
-.PHONY: eval test lint build secrets all
+.PHONY: eval test lint build secrets smoke all
 
 ## Rejoue le jeu d'évaluation (eval/cases.md) et sort un score chiffré.
 ## Aucune clé fournisseur nécessaire : le fournisseur est simulé.
 eval:
 	python3 eval/run_eval.py
+
+## Smoke tests providers RÉELS — opt-in : chaque test ne s'exécute que si la
+## variable de clé correspondante est définie (MINIMAX_API_KEY, OPENAI_API_KEY,
+## ANTHROPIC_API_KEY, GEMINI_API_KEY). Sinon, tests « skipped ».
+smoke:
+	python3 -m pytest backend/tests/test_minimax_smoke.py -q -rs
 
 ## Suites de tests backend + frontend.
 test:
