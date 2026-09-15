@@ -69,6 +69,7 @@ async function loadFullHistory(analysisId: string): Promise<AnalysisEventEnvelop
 export function useAnalysisController(
   analysisId: string | null,
   onNotFound?: () => void,
+  credential?: string | null,
 ): AnalysisController {
   const [snapshot, setSnapshot] = useState<AnalysisSnapshot | null>(null)
   const [events, setEvents] = useState<readonly AnalysisEvent[]>([])
@@ -82,8 +83,10 @@ export function useAnalysisController(
   const startedRef = useRef(false)
   const disconnectedRef = useRef(false)
   const snapshotGenerationRef = useRef(0)
+  const credentialRef = useRef<string | null>(credential ?? null)
 
   snapshotRef.current = snapshot
+  credentialRef.current = credential ?? null
 
   const retry = useCallback((): void => {
     setRetryNonce((current) => current + 1)
@@ -150,7 +153,7 @@ export function useAnalysisController(
         let lastError: unknown = null
         for (let attempt = 1; attempt <= START_MAX_ATTEMPTS; attempt += 1) {
           try {
-            await startAnalysis(id)
+            await startAnalysis(id, credentialRef.current)
             return
           } catch (error) {
             lastError = error

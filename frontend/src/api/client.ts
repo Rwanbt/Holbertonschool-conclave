@@ -5,7 +5,9 @@ import type {
   AnalysisSnapshot,
   ApiError,
   EventsHistoryResponse,
+  ProviderCatalogResponse,
   StartAnalysisResponse,
+  TestConnectionResponse,
   ToolCatalogResponse,
   ToolCommandResponse,
 } from '../types'
@@ -14,7 +16,9 @@ import {
   parseAnalysisCreated,
   parseAnalysisSnapshot,
   parseEventsHistoryResponse,
+  parseProviderCatalogResponse,
   parseStartAnalysisResponse,
+  parseTestConnectionResponse,
   parseToolCatalogResponse,
   parseToolCommandResponse,
   ResponseValidationError,
@@ -29,6 +33,12 @@ const AGENT_ENDPOINT: string = `${BASE_URL}/api/p3/agent`
 const ANALYSES_ENDPOINT: string = `${BASE_URL}/api/analyses`
 const TOOLS_ENDPOINT: string = `${BASE_URL}/api/tools`
 const TOOL_COMMANDS_ENDPOINT: string = `${BASE_URL}/api/tool-commands`
+const PROVIDERS_ENDPOINT: string = `${BASE_URL}/api/providers`
+const PROVIDER_TEST_ENDPOINT: string = `${BASE_URL}/api/providers/test-connection`
+
+// Le cookie de session anonyme (isolation multi-utilisateur) doit accompagner
+// TOUTES les requêtes : `credentials: 'include'`.
+const CREDENTIALS: RequestCredentials = 'include'
 
 export async function runAgent(
   instruction: string,
@@ -42,6 +52,7 @@ export async function runAgent(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
+      credentials: CREDENTIALS,
     })
   } catch {
     throw {
@@ -59,13 +70,71 @@ export async function runAgent(
   return parseWith<AgentResponse>(body, parseAgentResponse)
 }
 
-export async function createAnalysis(document: string): Promise<AnalysisCreated> {
+export async function fetchProviderCatalog(): Promise<ProviderCatalogResponse> {
+  let response: Response
+  try {
+    response = await fetch(PROVIDERS_ENDPOINT, { credentials: CREDENTIALS })
+  } catch {
+    throw {
+      kind: 'network',
+      message: `Impossible de joindre le backend (${API_BASE_URL}). Lancez-le puis réessayez.`,
+    } satisfies ApiError
+  }
+  if (!response.ok) {
+    throw await httpError(response)
+  }
+  const body: unknown = await readJson(response)
+  return parseWith<ProviderCatalogResponse>(body, parseProviderCatalogResponse)
+}
+
+export async function testProviderConnection(
+  providerId: string,
+  modelId: string,
+  apiKey: string,
+): Promise<TestConnectionResponse> {
+  let response: Response
+  try {
+    response = await fetch(PROVIDER_TEST_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        provider_id: providerId,
+        model_id: modelId,
+        api_key: apiKey,
+      }),
+      credentials: CREDENTIALS,
+    })
+  } catch {
+    throw {
+      kind: 'network',
+      message: `Impossible de joindre le backend (${API_BASE_URL}). Lancez-le puis réessayez.`,
+    } satisfies ApiError
+  }
+  if (!response.ok) {
+    throw await httpError(response)
+  }
+  const body: unknown = await readJson(response)
+  return parseWith<TestConnectionResponse>(body, parseTestConnectionResponse)
+}
+
+export async function createAnalysis(
+  document: string,
+  providerId: string,
+  modelId: string,
+  enabledTools: string[] | null,
+): Promise<AnalysisCreated> {
   let response: Response
   try {
     response = await fetch(ANALYSES_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ document }),
+      body: JSON.stringify({
+        document,
+        provider_id: providerId,
+        model_id: modelId,
+        enabled_tools: enabledTools,
+      }),
+      credentials: CREDENTIALS,
     })
   } catch {
     throw {
@@ -84,11 +153,16 @@ export async function createAnalysis(document: string): Promise<AnalysisCreated>
 
 export async function startAnalysis(
   analysisId: string,
+  apiKey?: string | null,
 ): Promise<StartAnalysisResponse> {
+  const hasCredential = typeof apiKey === 'string' && apiKey.length > 0
   let response: Response
   try {
     response = await fetch(`${ANALYSES_ENDPOINT}/${analysisId}/start`, {
       method: 'POST',
+      headers: hasCredential ? { 'Content-Type': 'application/json' } : undefined,
+      body: hasCredential ? JSON.stringify({ api_key: apiKey }) : undefined,
+      credentials: CREDENTIALS,
     })
   } catch {
     throw {
@@ -114,6 +188,7 @@ export async function fetchEventsHistory(
   try {
     response = await fetch(
       `${ANALYSES_ENDPOINT}/${analysisId}/events/history?after=${Math.max(0, after)}&limit=${limit}`,
+      { credentials: CREDENTIALS },
     )
   } catch {
     throw {
@@ -135,7 +210,9 @@ export async function fetchAnalysisSnapshot(
 ): Promise<AnalysisSnapshot> {
   let response: Response
   try {
-    response = await fetch(`${ANALYSES_ENDPOINT}/${analysisId}`)
+    response = await fetch(`${ANALYSES_ENDPOINT}/${analysisId}`, {
+      credentials: CREDENTIALS,
+    })
   } catch {
     throw {
       kind: 'network',
@@ -154,7 +231,7 @@ export async function fetchAnalysisSnapshot(
 export async function fetchToolCatalog(): Promise<ToolCatalogResponse> {
   let response: Response
   try {
-    response = await fetch(TOOLS_ENDPOINT)
+    response = await fetch(TOOLS_ENDPOINT, { credentials: CREDENTIALS })
   } catch {
     throw {
       kind: 'network',
@@ -179,6 +256,7 @@ export async function applyToolCommand(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ command }),
+      credentials: CREDENTIALS,
     })
   } catch {
     throw {
@@ -250,17 +328,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function defaultStatusMessage(status: number): string {
+  if (status === 401 || status === 403) {
+    return 'Accès refusé par le serveur (authentification du fournisseur).'
+  }
   if (status === 404) {
-    return 'Analyse introuvable sur le serveur (code 404).'
+    return 'Analyse introuvable ou non autorisée sur le serveur (code 404).'
   }
   if (status === 422) {
     return 'Commande ou document refusé par le backend (code 422).'
   }
+  if (status === 429) {
+    return 'Trop de requêtes : quota ou limite de débit atteint (code 429).'
+  }
   if (status === 500) {
-    return 'Configuration serveur absente côté backend (code 500).'
+    return 'Erreur de configuration côté backend (code 500).'
   }
   if (status === 502) {
-    return 'Le fournisseur MiniMax est momentanément indisponible (code 502).'
+    return 'Le fournisseur IA est momentanément indisponible (code 502).'
   }
   return `Le serveur a répondu avec le code HTTP ${status}.`
 }

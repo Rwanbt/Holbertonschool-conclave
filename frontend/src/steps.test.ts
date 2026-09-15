@@ -28,6 +28,8 @@ function runningSnapshot(): AnalysisSnapshot {
     started_at: null,
     completed_at: null,
     error_code: null,
+    provider_id: 'minimax',
+    model_id: 'MiniMax-M3',
     avocat: { role: 'avocat', status: 'pending', output: null, error_code: null },
     procureur: { role: 'procureur', status: 'pending', output: null, error_code: null },
     comptable: { role: 'comptable', status: 'pending', output: null, error_code: null },

@@ -22,6 +22,8 @@ function snapshot(overrides: Partial<AnalysisSnapshot> = {}): AnalysisSnapshot {
     started_at: 't',
     completed_at: 't',
     error_code: null,
+    provider_id: 'minimax',
+    model_id: 'MiniMax-M3',
     avocat: { role: 'avocat', status: 'error', output: null, error_code: null },
     procureur: { role: 'procureur', status: 'error', output: null, error_code: null },
     comptable: { role: 'comptable', status: 'error', output: null, error_code: null },

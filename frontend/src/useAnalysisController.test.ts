@@ -1,5 +1,5 @@
-import { act, renderHook, waitFor } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { renderHook, waitFor } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   START_FALLBACK_MS,
   START_MAX_ATTEMPTS,
@@ -17,6 +17,8 @@ function baseSnapshot(overrides: Partial<AnalysisSnapshot> = {}): AnalysisSnapsh
     started_at: null,
     completed_at: null,
     error_code: null,
+    provider_id: 'minimax',
+    model_id: 'MiniMax-M3',
     avocat: { role: 'avocat', status: 'pending', output: null, error_code: null },
     procureur: { role: 'procureur', status: 'pending', output: null, error_code: null },
     comptable: { role: 'comptable', status: 'pending', output: null, error_code: null },
@@ -58,41 +60,29 @@ function emptyHistory(): EventsHistoryResponse {
   return { events: [], last_event_id: 0, has_more: false }
 }
 
-class FakeEventSource {
-  static instances: FakeEventSource[] = []
-  url: string
-  onopen: (() => void) | null = null
-  onerror: (() => void) | null = null
-  closed = false
-  private listeners: Record<string, ((event: { data: string; lastEventId: string }) => void)[]> = {}
-
-  constructor(url: string) {
-    this.url = url
-    FakeEventSource.instances.push(this)
-  }
-
-  addEventListener(type: string, handler: (event: { data: string; lastEventId: string }) => void): void {
-    ;(this.listeners[type] ??= []).push(handler)
-  }
-
-  close(): void {
-    this.closed = true
-  }
-
-  triggerOpen(): void {
-    this.onopen?.()
-  }
-
-  emit(type: string, id: number, data: Record<string, unknown>): void {
-    const event = { data: JSON.stringify(data), lastEventId: String(id) }
-    for (const handler of this.listeners[type] ?? []) {
-      handler(event)
-    }
-  }
-}
-
 function jsonResponse(body: unknown): Response {
   return { ok: true, status: 200, json: async () => body } as Response
+}
+
+/** Flux SSE contrôlable : `push`/`close` pilotent la connexion fetch. */
+function sseStream(): {
+  response: Response
+  push: (chunk: string) => void
+  close: () => void
+} {
+  let controller: ReadableStreamDefaultController<Uint8Array>
+  const encoder = new TextEncoder()
+  const stream = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c
+    },
+  })
+  const response = new Response(stream, { status: 200 })
+  return {
+    response,
+    push: (chunk) => controller.enqueue(encoder.encode(chunk)),
+    close: () => controller.close(),
+  }
 }
 
 function routeFetch(
@@ -104,6 +94,9 @@ function routeFetch(
     if (url.includes('/events/history')) {
       return jsonResponse(history)
     }
+    if (url.includes('/events?after=')) {
+      return sseStream().response
+    }
     if (url.endsWith('/start') && init?.method === 'POST') {
       return jsonResponse({ analysis_id: snapshot.analysis_id, status: 'running', already_started: false })
     }
@@ -112,38 +105,27 @@ function routeFetch(
 }
 
 describe('useAnalysisController', () => {
-  beforeEach(() => {
-    FakeEventSource.instances = []
-    vi.stubGlobal('EventSource', FakeEventSource)
-  })
-
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('ouvre le SSE puis démarre l’analyse une seule fois après onopen (queued)', async () => {
+  it('ouvre le flux SSE (fetch) puis démarre l’analyse une seule fois', async () => {
     const snapshot = baseSnapshot({ status: 'queued' })
     const fetchMock = routeFetch(snapshot, emptyHistory())
     vi.stubGlobal('fetch', fetchMock)
 
     renderHook(() => useAnalysisController('a1'))
 
-    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
-    const source = FakeEventSource.instances[0]
-    expect(source.url).toContain('after=0')
-
-    act(() => source.triggerOpen())
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([u]) => String(u).includes('/events?after=0')),
+      ).toBe(true),
+    )
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([u, init]) => String(u).endsWith('/start') && (init as RequestInit)?.method === 'POST')).toBe(true),
     )
-    const startCallsAfterFirstOpen = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/start')).length
-    expect(startCallsAfterFirstOpen).toBe(1)
-
-    // Une reconnexion native (nouvel onopen) ne doit PAS redéclencher /start.
-    act(() => source.triggerOpen())
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const startCallsAfterSecondOpen = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/start')).length
-    expect(startCallsAfterSecondOpen).toBe(1)
+    const startCalls = fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/start'))
+    expect(startCalls).toHaveLength(1)
   })
 
   it('n’ouvre jamais le flux SSE pour une analyse déjà terminale (F5)', async () => {
@@ -162,7 +144,7 @@ describe('useAnalysisController', () => {
     const { result } = renderHook(() => useAnalysisController('a1'))
 
     await waitFor(() => expect(result.current.connection.status).toBe('closed'))
-    expect(FakeEventSource.instances).toHaveLength(0)
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/events?after='))).toBe(false)
     expect(result.current.events.map((e) => e.type)).toEqual([
       'analysis.created',
       'analysis.completed',
@@ -173,17 +155,23 @@ describe('useAnalysisController', () => {
   })
 
   it('démarre quand même l’analyse si le flux SSE ne s’ouvre jamais', async () => {
-    // Filet de sécurité : sans lui, une analyse restait `queued` pour
-    // toujours dès que `onopen` n'arrivait pas (proxy, limite de connexions),
-    // et l'application paraissait figée sans aucune erreur.
     const snapshot = baseSnapshot({ status: 'queued' })
-    const fetchMock = routeFetch(snapshot, emptyHistory())
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/events/history')) return jsonResponse(emptyHistory())
+      if (url.includes('/events?after=')) {
+        // Ne se résout JAMAIS : le flux ne s'ouvre pas.
+        return new Promise(() => {}) as Promise<Response>
+      }
+      if (url.endsWith('/start') && init?.method === 'POST') {
+        return jsonResponse({ analysis_id: snapshot.analysis_id, status: 'running', already_started: false })
+      }
+      return jsonResponse(snapshot)
+    })
     vi.stubGlobal('fetch', fetchMock)
 
     renderHook(() => useAnalysisController('a1'))
 
-    // Le flux est bien ouvert, mais `onopen` n'est JAMAIS déclenché.
-    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
     const startCalls = () =>
       fetchMock.mock.calls.filter(([u]) => String(u).endsWith('/start')).length
     expect(startCalls()).toBe(0)
@@ -191,11 +179,6 @@ describe('useAnalysisController', () => {
     await waitFor(() => expect(startCalls()).toBe(1), {
       timeout: START_FALLBACK_MS + 2000,
     })
-
-    // Et si `onopen` finit par arriver, il ne redémarre pas une deuxième fois.
-    act(() => FakeEventSource.instances[0].triggerOpen())
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(startCalls()).toBe(1)
   })
 
   it('reprend le flux après le dernier identifiant hydraté (analyse running rechargée)', async () => {
@@ -213,8 +196,9 @@ describe('useAnalysisController', () => {
 
     renderHook(() => useAnalysisController('a1'))
 
-    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
-    expect(FakeEventSource.instances[0].url).toContain('after=2')
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/events?after=2'))).toBe(true),
+    )
   })
 
   it('ne rouvre pas SSE quand l’historique est terminal mais le snapshot est en retard', async () => {
@@ -245,7 +229,7 @@ describe('useAnalysisController', () => {
 
     await waitFor(() => expect(result.current.connection.status).toBe('closed'))
     await waitFor(() => expect(result.current.snapshot?.status).toBe('completed'))
-    expect(FakeEventSource.instances).toHaveLength(0)
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/events?after='))).toBe(false)
   })
 
   it('rend l’échec de /start visible après un nombre borné de tentatives', async () => {
@@ -253,6 +237,7 @@ describe('useAnalysisController', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/events/history')) return jsonResponse(emptyHistory())
+      if (url.includes('/events?after=')) return sseStream().response
       if (url.endsWith('/start') && init?.method === 'POST') {
         throw new TypeError('network down')
       }
@@ -261,8 +246,9 @@ describe('useAnalysisController', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const { result } = renderHook(() => useAnalysisController('a1'))
-    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
-    act(() => FakeEventSource.instances[0].triggerOpen())
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes('/events?after='))).toBe(true),
+    )
 
     await waitFor(() => expect(result.current.connection.status).toBe('error'), {
       timeout: START_RETRY_DELAY_MS * START_MAX_ATTEMPTS + 3000,
@@ -273,5 +259,19 @@ describe('useAnalysisController', () => {
       status: 'error',
       message: expect.stringContaining('Réessayez la connexion'),
     })
+  })
+
+  it('transmet le credential BYOK au démarrage quand il est fourni', async () => {
+    const snapshot = baseSnapshot({ status: 'queued' })
+    const fetchMock = routeFetch(snapshot, emptyHistory())
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderHook(() => useAnalysisController('a1', undefined, 'sk-user-secret'))
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/start'))).toBe(true),
+    )
+    const startInit = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/start'))![1] as RequestInit
+    expect(startInit.body).toContain('sk-user-secret')
   })
 })

@@ -16,7 +16,11 @@ import type {
   ExpertRun,
   GuardrailInfo,
   Priority,
+  ProviderCatalogResponse,
+  ProviderInfo,
+  ProviderModelInfo,
   StartAnalysisResponse,
+  TestConnectionResponse,
   ToolCatalogResponse,
   ToolCommandResponse,
   SecurityReport,
@@ -406,9 +410,19 @@ export function parseAnalysisCreated(body: unknown): AnalysisCreated {
     ANALYSIS_STATUSES,
   )
   const created_at = readString(record, 'created_at')
+  const provider_id = readNonEmptyString(record, 'provider_id')
+  const model_id = readNonEmptyString(record, 'model_id')
   const tool_configuration = parseToolConfiguration(record.tool_configuration)
   const security = parseSecurityReport(record.security)
-  return { analysis_id, status, created_at, tool_configuration, security }
+  return {
+    analysis_id,
+    status,
+    created_at,
+    provider_id,
+    model_id,
+    tool_configuration,
+    security,
+  }
 }
 
 export function parseStartAnalysisResponse(body: unknown): StartAnalysisResponse {
@@ -457,6 +471,8 @@ export function parseAnalysisSnapshot(body: unknown): AnalysisSnapshot {
   const started_at = readNullableString(record.started_at, 'started_at')
   const completed_at = readNullableString(record.completed_at, 'completed_at')
   const error_code = readNullableString(record.error_code, 'error_code')
+  const provider_id = readNullableString(record.provider_id, 'provider_id')
+  const model_id = readNullableString(record.model_id, 'model_id')
   const avocat = parseExpertRun(record.avocat)
   const procureur = parseExpertRun(record.procureur)
   const comptable = parseExpertRun(record.comptable)
@@ -473,6 +489,8 @@ export function parseAnalysisSnapshot(body: unknown): AnalysisSnapshot {
     started_at,
     completed_at,
     error_code,
+    provider_id,
+    model_id,
     avocat,
     procureur,
     comptable,
@@ -686,6 +704,96 @@ function readNullableToolName(value: unknown): ToolName | null {
     )
   }
   return value as ToolName
+}
+
+export function parseProviderCatalogResponse(
+  body: unknown,
+): ProviderCatalogResponse {
+  const record = requireRecord(body)
+  const providersValue = record.providers
+  if (!Array.isArray(providersValue)) {
+    throw new ResponseValidationError(
+      'le champ "providers" n\'est pas un tableau.',
+    )
+  }
+  const providers = providersValue.map(parseProviderInfo)
+  return { providers }
+}
+
+function parseProviderInfo(value: unknown): ProviderInfo {
+  const record = requireRecord(value)
+  const provider_id = readNonEmptyString(record, 'provider_id')
+  const label = readNonEmptyString(record, 'label')
+  const auth_modes = readStringList(record.auth_modes, 'auth_modes', 5)
+  const supports_tools = readBoolean(record, 'supports_tools')
+  const supports_streaming = readBoolean(record, 'supports_streaming')
+  const supports_structured_output = readBoolean(
+    record,
+    'supports_structured_output',
+  )
+  const supports_reasoning =
+    record.supports_reasoning === undefined
+      ? false
+      : readBoolean(record, 'supports_reasoning')
+  const modelsValue = record.models
+  if (!Array.isArray(modelsValue)) {
+    throw new ResponseValidationError(
+      'le champ "models" n\'est pas un tableau.',
+    )
+  }
+  const models = modelsValue.map(parseProviderModel)
+  return {
+    provider_id,
+    label,
+    auth_modes,
+    supports_tools,
+    supports_streaming,
+    supports_structured_output,
+    supports_reasoning,
+    models,
+  }
+}
+
+function parseProviderModel(value: unknown): ProviderModelInfo {
+  const record = requireRecord(value)
+  const model_id = readNonEmptyString(record, 'model_id')
+  const supports_tools = readBoolean(record, 'supports_tools')
+  const supports_streaming = readBoolean(record, 'supports_streaming')
+  const supports_structured_output = readBoolean(
+    record,
+    'supports_structured_output',
+  )
+  let pricing: Record<string, unknown> | null = null
+  if (record.pricing !== null && record.pricing !== undefined) {
+    if (!isRecord(record.pricing)) {
+      throw new ResponseValidationError(
+        'le champ "pricing" n\'est ni un objet ni null.',
+      )
+    }
+    pricing = record.pricing
+  }
+  return {
+    model_id,
+    supports_tools,
+    supports_streaming,
+    supports_structured_output,
+    pricing,
+  }
+}
+
+export function parseTestConnectionResponse(
+  body: unknown,
+): TestConnectionResponse {
+  const record = requireRecord(body)
+  const provider_id = readNonEmptyString(record, 'provider_id')
+  const model_id = readNonEmptyString(record, 'model_id')
+  const ok = readBoolean(record, 'ok')
+  const message = readString(record, 'message')
+  const needs_inference =
+    record.needs_inference === undefined
+      ? false
+      : readBoolean(record, 'needs_inference')
+  return { provider_id, model_id, ok, message, needs_inference }
 }
 
 export function parseAnalysisEvent(

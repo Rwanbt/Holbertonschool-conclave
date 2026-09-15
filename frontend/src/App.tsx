@@ -4,6 +4,7 @@ import { ArbiterLivePanel } from './components/ArbiterLivePanel'
 import { ConclaveStepper } from './components/ConclaveStepper'
 import { DebugPanel } from './components/DebugPanel'
 import { ExpertColumn } from './components/ExpertColumn'
+import { ProviderPanel } from './components/ProviderPanel'
 import { ToolsPanel } from './components/ToolsPanel'
 import { VerdictPanel } from './components/VerdictPanel'
 import { WhyPanel } from './components/WhyPanel'
@@ -20,6 +21,7 @@ import {
 import { isTerminalAnalysisStatus, liveExpertRun } from './steps'
 import type { AnalysisStatus } from './types'
 import { useAnalysisController } from './useAnalysisController'
+import { useProviderConnection } from './useProviderConnection'
 import { useTheme } from './useTheme'
 import { useToolCatalog } from './useToolCatalog'
 import { isNonEmptyTrimmed, MAX_DOCUMENT_LENGTH } from './utils'
@@ -71,8 +73,9 @@ export default function App() {
     )
   }, [])
 
-  const controller = useAnalysisController(analysisId, handleNotFound)
   const toolCatalog = useToolCatalog()
+  const provider = useProviderConnection()
+  const controller = useAnalysisController(analysisId, handleNotFound, provider.apiKey)
   const theme = useTheme()
 
   const isNew = analysisId === null
@@ -83,17 +86,29 @@ export default function App() {
     submitState.status !== 'submitting' &&
     isNonEmptyTrimmed(document) &&
     document.length <= MAX_DOCUMENT_LENGTH &&
-    catalogReady
+    catalogReady &&
+    provider.isReady
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     if (!canSubmit) {
       return
     }
+    if (provider.selectedProviderId === null || provider.selectedModelId === null) {
+      return
+    }
     setSubmitState({ status: 'submitting' })
     setNotFoundNotice(null)
     try {
-      const created = await createAnalysis(document.trim())
+      const enabledTools = toolCatalog.tools
+        .filter((tool) => tool.enabled)
+        .map((tool) => tool.tool_name)
+      const created = await createAnalysis(
+        document.trim(),
+        provider.selectedProviderId,
+        provider.selectedModelId,
+        enabledTools,
+      )
       writeStoredAnalysisId(created.analysis_id)
       history.replaceState(null, '', buildUrlWithAnalysisId(new URL(window.location.href), created.analysis_id))
       setAnalysisId(created.analysis_id)
@@ -102,7 +117,7 @@ export default function App() {
       const status = httpStatusOf(error)
       const message =
         status === 422
-          ? 'Document refusé par le backend (code 422) : vérifiez la taille et le contenu.'
+          ? 'Document ou sélection refusés par le backend (code 422) : vérifiez la taille, le contenu et le modèle.'
           : toErrorMessage(error)
       setSubmitState({ status: 'error', message })
     }
@@ -154,12 +169,20 @@ export default function App() {
 
       <ConclaveStepper snapshot={snapshot} events={controller.events} />
 
+      <ProviderPanel connection={provider} />
+
       <ToolsPanel catalog={toolCatalog} frozenConfiguration={frozenConfiguration} />
 
       {isNew && (
         <section className="submit-panel" aria-label="Soumettre un document">
           {submitState.status === 'error' && (
             <p className="status-error">{submitState.message}</p>
+          )}
+          {!provider.isReady && (
+            <p className="status-warning">
+              Pour convoquer le Conclave, connectez d'abord un fournisseur IA
+              (fournisseur, modèle compatible et clé API valide).
+            </p>
           )}
           <form className="conclave-form" onSubmit={(event) => void handleSubmit(event)}>
             <fieldset className="conclave-field" disabled={submitState.status === 'submitting'}>

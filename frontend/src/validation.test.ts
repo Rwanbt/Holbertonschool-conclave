@@ -23,6 +23,8 @@ function snapshotFixture() {
     started_at: '2026-08-19T10:00:01+00:00',
     completed_at: '2026-08-19T10:00:42+00:00',
     error_code: null,
+    provider_id: 'minimax',
+    model_id: 'MiniMax-M3',
     avocat: {
       role: 'avocat',
       status: 'completed',
@@ -151,6 +153,8 @@ describe('parseAnalysisCreated', () => {
       analysis_id: 'xx',
       status: 'queued',
       created_at: '2026-08-19T10:00:00+00:00',
+      provider_id: 'minimax',
+      model_id: 'MiniMax-M3',
       tool_configuration: {
         enabled_tools: ['measure_current_document'],
         disabled_tools: [
