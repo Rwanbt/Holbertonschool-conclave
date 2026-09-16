@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main, dev]
+    branches: [main, dev, erwan]
 
 jobs:
   backend:
@@ -16,11 +16,20 @@ jobs:
           python-version: "3.11"
       - name: Install backend dependencies
         run: pip install -r backend/requirements.txt
-      - name: "Run backend test suite (no MiniMax key: real-provider smoke test skips itself)"
+      - name: "Run backend test suite (no LLM key: real-provider smoke test skips itself)"
         run: python -m pytest backend/tests -q
 
-      - name: Run the evaluation suite (scored, no MiniMax key needed)
+      - name: "Provider adapter contract tests (simulated, no keys)"
+        run: python -m pytest backend/tests/test_providers.py -q
+
+      - name: "Isolation and secret-leakage tests"
+        run: python -m pytest backend/tests/test_isolation.py -q
+
+      - name: Run the evaluation suite (scored, no LLM key needed)
         run: python eval/run_eval.py
+
+      - name: "Secret leakage check on the published bundle"
+        run: ./scripts/check-no-secrets.sh frontend/dist
 
   frontend:
     name: Frontend tests, lint and build
@@ -41,9 +50,23 @@ jobs:
       - name: Lint
         working-directory: frontend
         run: npm run lint
-      - name: Build
+      - name: Typecheck + Build
         working-directory: frontend
         run: npm run build
 
       - name: Verify no secret leaked into the published bundle
         run: ./scripts/check-no-secrets.sh
+
+  deploy:
+    name: Deploy artifacts validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate netlify.toml build (frontend, no secrets)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+          test -f ../netlify.toml
+      - name: Validate backend Docker image builds
+        run: docker build -f backend/Dockerfile -t conclave-backend:ci backend

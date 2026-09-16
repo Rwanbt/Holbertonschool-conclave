@@ -116,6 +116,9 @@ export interface AnalysisCreated {
   analysis_id: string
   status: AnalysisStatus
   created_at: string
+  provider_id: string
+  model_id: string
+  session_token: string
   tool_configuration: ToolConfiguration
   security: SecurityReport
 }
@@ -147,6 +150,8 @@ export interface AnalysisSnapshot {
   started_at: string | null
   completed_at: string | null
   error_code: string | null
+  provider_id: string | null
+  model_id: string | null
   avocat: ExpertRun
   procureur: ExpertRun
   comptable: ExpertRun
@@ -251,3 +256,53 @@ export type ApiError =
   | { kind: 'network'; message: string }
   | { kind: 'http'; status: number; message: string }
   | { kind: 'malformed'; message: string }
+
+// ---------------------------------------------------------------------------
+// Multi-provider BYOK — registre public et connexion au modèle
+// ---------------------------------------------------------------------------
+
+export interface ProviderModelInfo {
+  model_id: string
+  supports_tools: boolean
+  supports_streaming: boolean
+  supports_structured_output: boolean
+  pricing: Record<string, unknown> | null
+}
+
+export interface ProviderInfo {
+  provider_id: string
+  label: string
+  auth_modes: string[]
+  supports_tools: boolean
+  supports_streaming: boolean
+  supports_structured_output: boolean
+  supports_reasoning: boolean
+  oauth_supported: boolean
+  oauth_configured: boolean
+  models: ProviderModelInfo[]
+}
+
+export interface ProviderCatalogResponse {
+  providers: ProviderInfo[]
+}
+
+export interface TestConnectionResponse {
+  provider_id: string
+  model_id: string
+  ok: boolean
+  message: string
+  needs_inference: boolean
+}
+
+/** Sélection non secrète : fige provider + modèle pour une analyse. */
+export interface ProviderSelection {
+  providerId: string
+  modelId: string
+}
+
+export type ProviderConnectionStatus =
+  | 'disconnected'
+  | 'testing'
+  | 'connected'
+  | 'unverified'
+  | 'error'

@@ -44,7 +44,7 @@ Cet outil ne prend aucun argument.
 
 estimate_current_analysis_cost :
 Estime le coût en dollars d'une analyse du document chargé sur le serveur, en fonction
-des tarifs MiniMax configurés et du budget de sortie. Appelle-le APRÈS avoir observé
+des tarifs du fournisseur/modèle choisi (BYOK) et du budget de sortie. Appelle-le APRÈS avoir observé
 les métriques du document. Cet outil ne prend aucun argument.
 ```
 
@@ -88,7 +88,7 @@ Voir OUTILS.md pour les types exacts (`DocumentMetrics`, `SecurityFinding`,
 ### Schéma de la boucle
 
 ```text
-MiniMax (system + tools, pas de document)
+Provider (system + tools, pas de document)
    │  tool_calls
    ▼
 Serveur : registre → validation nom/arguments → DISABLED_TOOLS → exécution
@@ -331,3 +331,26 @@ polling toutes les `SSE_POLL_INTERVAL_MS` ms avec keep-alive toutes les
 `SSE_KEEPALIVE_SECONDS` s. Le terminal (`analysis.completed`/`degraded`/`failed`)
 et son événement sont committés atomiquement par `db.finish_analysis` : un client
 ne peut jamais voir un statut terminal sans son événement terminal.
+
+---
+
+## Abstraction provider (v1.1)
+
+L'orchestrateur, les experts et l'Arbitre ne connaissent AUCUN fournisseur
+concret : ils travaillent sur `ProviderAdapter` (`backend/app/providers/`) et
+sur les structures normalisées (`ProviderResult`, `ProviderChunk`, usage,
+erreur). Toute particularité fournisseur reste dans SON adapter :
+
+- MiniMax : `thinking` désactivé via `extra_body` ;
+- OpenAI : aucune ;
+- Anthropic : `system` top-level, `max_tokens` obligatoire, blocs tool_use ;
+- Gemini : `contents` user/model, clé `x-goog-api-key`.
+
+Le registre (`providers/registry.py`) est une allowlist d'endpoints : une
+`base_url` n'est jamais saisie par l'utilisateur (anti-SSRF). `GET
+/api/providers` expose les métadonnées publiques (aucun secret).
+
+Ne modifie les prompts métier que si nécessaire : le contrat agentique
+(parallélisme, validation, non-invention, bornes) est préservé par l'évolutif.
+Le coût estimé dépend du fournisseur/modèle figé par l'analyse
+(`AgentSession.pricing`) : aucun tarif connu → `estimated_cost_usd = null`.

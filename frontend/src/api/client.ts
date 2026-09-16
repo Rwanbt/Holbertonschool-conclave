@@ -5,7 +5,9 @@ import type {
   AnalysisSnapshot,
   ApiError,
   EventsHistoryResponse,
+  ProviderCatalogResponse,
   StartAnalysisResponse,
+  TestConnectionResponse,
   ToolCatalogResponse,
   ToolCommandResponse,
 } from '../types'
@@ -14,11 +16,14 @@ import {
   parseAnalysisCreated,
   parseAnalysisSnapshot,
   parseEventsHistoryResponse,
+  parseProviderCatalogResponse,
   parseStartAnalysisResponse,
+  parseTestConnectionResponse,
   parseToolCatalogResponse,
   parseToolCommandResponse,
   ResponseValidationError,
 } from '../validation'
+import { readStoredSessionToken, writeStoredSessionToken } from '../storage'
 
 const API_BASE_URL: string =
   import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
@@ -29,6 +34,98 @@ const AGENT_ENDPOINT: string = `${BASE_URL}/api/p3/agent`
 const ANALYSES_ENDPOINT: string = `${BASE_URL}/api/analyses`
 const TOOLS_ENDPOINT: string = `${BASE_URL}/api/tools`
 const TOOL_COMMANDS_ENDPOINT: string = `${BASE_URL}/api/tool-commands`
+const PROVIDERS_ENDPOINT: string = `${BASE_URL}/api/providers`
+const PROVIDER_TEST_ENDPOINT: string = `${BASE_URL}/api/providers/test-connection`
+
+// Le cookie de session anonyme (isolation multi-utilisateur) doit accompagner
+// TOUTES les requêtes : `credentials: 'include'`. Le token de session est
+// AUSSI envoyé en en-tête `X-Session-Token` pour rester fonctionnel en
+// cross-site (Netlify ↔ backend), indépendamment du SameSite du cookie.
+const CREDENTIALS: RequestCredentials = 'include'
+
+function sessionHeaders(): Record<string, string> {
+  const token = readStoredSessionToken()
+  return token !== null && token.length > 0 ? { 'X-Session-Token': token } : {}
+}
+
+export async function establishSession(): Promise<void> {
+  try {
+    const response = await fetch(`${BASE_URL}/api/session`, {
+      method: 'POST',
+      credentials: CREDENTIALS,
+      headers: sessionHeaders(),
+    })
+    if (response.ok) {
+      const body: unknown = await response.json()
+      if (
+        typeof body === 'object' &&
+        body !== null &&
+        'session_token' in body &&
+        typeof (body as Record<string, unknown>).session_token === 'string'
+      ) {
+        writeStoredSessionToken((body as Record<string, string>).session_token)
+      }
+    }
+  } catch {
+    // Le backend posera la session à la première analyse ; ceci n'est qu'une
+    // anticipation pour isoler dès l'ouverture les préférences d'outils.
+  }
+}
+
+export interface OAuthStatus {
+  provider_id: string
+  supported: boolean
+  configured: boolean
+  connected: boolean
+}
+
+/** Redirige le navigateur vers le flux OAuth officiel (Google Gemini). */
+export function startOAuth(providerId: string): void {
+  const token = readStoredSessionToken()
+  const query = token !== null && token.length > 0
+    ? `?session=${encodeURIComponent(token)}`
+    : ''
+  window.location.href = `${BASE_URL}/api/oauth/${providerId}/start${query}`
+}
+
+export async function fetchOAuthStatus(
+  providerId: string,
+): Promise<OAuthStatus> {
+  let response: Response
+  try {
+    response = await fetch(`${BASE_URL}/api/oauth/${providerId}/status`, {
+      credentials: CREDENTIALS,
+      headers: sessionHeaders(),
+    })
+  } catch {
+    throw {
+      kind: 'network',
+      message: `Impossible de joindre le backend (${API_BASE_URL}).`,
+    } satisfies ApiError
+  }
+  if (!response.ok) {
+    throw await httpError(response)
+  }
+  const body = (await response.json()) as Partial<OAuthStatus>
+  return {
+    provider_id: providerId,
+    supported: body.supported === true,
+    configured: body.configured === true,
+    connected: body.connected === true,
+  }
+}
+
+export async function disconnectOAuth(providerId: string): Promise<void> {
+  try {
+    await fetch(`${BASE_URL}/api/oauth/${providerId}/disconnect`, {
+      method: 'POST',
+      credentials: CREDENTIALS,
+      headers: sessionHeaders(),
+    })
+  } catch {
+    // Déconnexion best-effort ; l'interface rafraîchit l'état ensuite.
+  }
+}
 
 export async function runAgent(
   instruction: string,
@@ -40,8 +137,9 @@ export async function runAgent(
   try {
     response = await fetch(AGENT_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
       body: JSON.stringify(requestBody),
+      credentials: CREDENTIALS,
     })
   } catch {
     throw {
@@ -59,13 +157,71 @@ export async function runAgent(
   return parseWith<AgentResponse>(body, parseAgentResponse)
 }
 
-export async function createAnalysis(document: string): Promise<AnalysisCreated> {
+export async function fetchProviderCatalog(): Promise<ProviderCatalogResponse> {
+  let response: Response
+  try {
+    response = await fetch(PROVIDERS_ENDPOINT, { credentials: CREDENTIALS, headers: sessionHeaders() })
+  } catch {
+    throw {
+      kind: 'network',
+      message: `Impossible de joindre le backend (${API_BASE_URL}). Lancez-le puis réessayez.`,
+    } satisfies ApiError
+  }
+  if (!response.ok) {
+    throw await httpError(response)
+  }
+  const body: unknown = await readJson(response)
+  return parseWith<ProviderCatalogResponse>(body, parseProviderCatalogResponse)
+}
+
+export async function testProviderConnection(
+  providerId: string,
+  modelId: string,
+  apiKey: string,
+): Promise<TestConnectionResponse> {
+  let response: Response
+  try {
+    response = await fetch(PROVIDER_TEST_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
+      body: JSON.stringify({
+        provider_id: providerId,
+        model_id: modelId,
+        api_key: apiKey,
+      }),
+      credentials: CREDENTIALS,
+    })
+  } catch {
+    throw {
+      kind: 'network',
+      message: `Impossible de joindre le backend (${API_BASE_URL}). Lancez-le puis réessayez.`,
+    } satisfies ApiError
+  }
+  if (!response.ok) {
+    throw await httpError(response)
+  }
+  const body: unknown = await readJson(response)
+  return parseWith<TestConnectionResponse>(body, parseTestConnectionResponse)
+}
+
+export async function createAnalysis(
+  document: string,
+  providerId: string,
+  modelId: string,
+  enabledTools: string[] | null,
+): Promise<AnalysisCreated> {
   let response: Response
   try {
     response = await fetch(ANALYSES_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ document }),
+      headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
+      body: JSON.stringify({
+        document,
+        provider_id: providerId,
+        model_id: modelId,
+        enabled_tools: enabledTools,
+      }),
+      credentials: CREDENTIALS,
     })
   } catch {
     throw {
@@ -84,11 +240,16 @@ export async function createAnalysis(document: string): Promise<AnalysisCreated>
 
 export async function startAnalysis(
   analysisId: string,
+  apiKey?: string | null,
 ): Promise<StartAnalysisResponse> {
+  const hasCredential = typeof apiKey === 'string' && apiKey.length > 0
   let response: Response
   try {
     response = await fetch(`${ANALYSES_ENDPOINT}/${analysisId}/start`, {
       method: 'POST',
+      headers: { ...sessionHeaders(), ...(hasCredential ? { 'Content-Type': 'application/json' } : {}) },
+      body: hasCredential ? JSON.stringify({ api_key: apiKey }) : undefined,
+      credentials: CREDENTIALS,
     })
   } catch {
     throw {
@@ -114,6 +275,7 @@ export async function fetchEventsHistory(
   try {
     response = await fetch(
       `${ANALYSES_ENDPOINT}/${analysisId}/events/history?after=${Math.max(0, after)}&limit=${limit}`,
+      { credentials: CREDENTIALS, headers: sessionHeaders() },
     )
   } catch {
     throw {
@@ -135,7 +297,10 @@ export async function fetchAnalysisSnapshot(
 ): Promise<AnalysisSnapshot> {
   let response: Response
   try {
-    response = await fetch(`${ANALYSES_ENDPOINT}/${analysisId}`)
+    response = await fetch(`${ANALYSES_ENDPOINT}/${analysisId}`, {
+      credentials: CREDENTIALS,
+      headers: sessionHeaders(),
+    })
   } catch {
     throw {
       kind: 'network',
@@ -154,7 +319,7 @@ export async function fetchAnalysisSnapshot(
 export async function fetchToolCatalog(): Promise<ToolCatalogResponse> {
   let response: Response
   try {
-    response = await fetch(TOOLS_ENDPOINT)
+    response = await fetch(TOOLS_ENDPOINT, { credentials: CREDENTIALS, headers: sessionHeaders() })
   } catch {
     throw {
       kind: 'network',
@@ -177,8 +342,9 @@ export async function applyToolCommand(
   try {
     response = await fetch(TOOL_COMMANDS_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
       body: JSON.stringify({ command }),
+      credentials: CREDENTIALS,
     })
   } catch {
     throw {
@@ -250,17 +416,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function defaultStatusMessage(status: number): string {
+  if (status === 401 || status === 403) {
+    return 'Accès refusé par le serveur (authentification du fournisseur).'
+  }
   if (status === 404) {
-    return 'Analyse introuvable sur le serveur (code 404).'
+    return 'Analyse introuvable ou non autorisée sur le serveur (code 404).'
   }
   if (status === 422) {
     return 'Commande ou document refusé par le backend (code 422).'
   }
+  if (status === 429) {
+    return 'Trop de requêtes : quota ou limite de débit atteint (code 429).'
+  }
   if (status === 500) {
-    return 'Configuration serveur absente côté backend (code 500).'
+    return 'Erreur de configuration côté backend (code 500).'
   }
   if (status === 502) {
-    return 'Le fournisseur MiniMax est momentanément indisponible (code 502).'
+    return 'Le fournisseur IA est momentanément indisponible (code 502).'
   }
   return `Le serveur a répondu avec le code HTTP ${status}.`
 }

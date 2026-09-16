@@ -1,14 +1,19 @@
-"""Boucle agentique générique (Palier 3 & 4) — MiniMax décide, le serveur exécute.
+"""Boucle agentique générique (Palier 3 & 4) — le provider décide, le serveur exécute.
 
 Ce module contient :
 - la boucle générique `run_agent_loop` : envoie les descriptions typées,
-  laisse MiniMax choisir (`tool_choice="auto"`), valide le JSON d'arguments,
+  laisse le provider choisir (`tool_choice="auto"`), valide le JSON d'arguments,
   vérifie l'état SQLite de l'outil au moment de l'exécution, exécute
   l'adaptateur réel, ajoute le résultat `role="tool"` avec le bon
   `tool_call_id`, persiste la trace via un callback, et s'arrête sur une
   sortie finale, une limite ou une répétition ;
 - le wrapper public `run_agent` (Palier 3) qui préserve sa signature et ses
   tests et utilise la même boucle.
+
+La boucle ne connaît AUCUN fournisseur concret : elle travaille sur un
+`ProviderAdapter` (voir providers/) et sur les structures normalisées
+`ProviderResult`/`ProviderChunk`. Les particularités MiniMax (thinking),
+OpenAI, Anthropic ou Gemini restent dans leurs adapters.
 
 Le prompt système et les descriptions d'outils sont recopiés dans AGENTS.md :
 toute modification ici doit y être répercutée.
@@ -23,7 +28,7 @@ from typing import Any, Awaitable, Callable
 
 from . import toolkit
 from .config import Settings, get_settings
-from .llm import ProviderError, build_client
+from .providers import ProviderError, build_provider, provider_pricing
 from .schemas import AgentResponse, ExecutionUsage, ToolTraceEntry
 from .streaming import LiveSinkError, stream_chat_completion
 
@@ -122,6 +127,11 @@ async def run_agent_loop(
     allowed_tools: frozenset[str] | None = None,
     round_event_sink: RoundEventSink | None = None,
     required_tools_before_final: frozenset[str] = frozenset(),
+    provider: Any | None = None,
+    provider_id: str = "minimax",
+    model: str | None = None,
+    api_key: str | None = None,
+    pricing: dict[str, Any] | None = None,
 ) -> AgentLoopResult:
     """Boucle générique bornée. `get_connection` alimente l'état SQLite des outils
     (repli Palier 3 quand `allowed_tools` n'est pas fourni).
@@ -167,14 +177,19 @@ async def run_agent_loop(
     stop_reason: str | None = None
     protocol_error_detail: str | None = None
     finish_reason: str | None = None
+    # Outil obligatoire à FORCER au prochain tour quand le modèle conclut sans
+    # l'avoir demandé (ex. Comptable qui hallucine avoir déjà mesuré). Sans ce
+    # forçage, un modèle non conforme brûle tous ses tours et échoue en
+    # `max_rounds_reached` au lieu d'obtenir ses preuves.
+    forced_tool: str | None = None
 
     def record_usage(completion: Any) -> None:
         nonlocal any_usage, total_input, total_output, total_tokens
         if completion.usage is None:
             return
         any_usage = True
-        total_input += completion.usage.prompt_tokens or 0
-        total_output += completion.usage.completion_tokens or 0
+        total_input += completion.usage.input_tokens or 0
+        total_output += completion.usage.output_tokens or 0
         total_tokens += completion.usage.total_tokens or 0
 
     async def emit_round_completed(
@@ -197,8 +212,20 @@ async def run_agent_loop(
                 payload,
             )
 
-    async with build_client(settings) as client:
-        # Boucle visible et montrable : chaque round est un appel MiniMax.
+    created_provider = provider is None
+    if provider is None:
+        provider = build_provider(
+            provider_id=provider_id,
+            model_id=model or settings.minimax_model,
+            api_key=api_key,
+            settings=settings,
+        )
+    if pricing is None:
+        pricing = provider_pricing(
+            settings, provider_id, model or settings.minimax_model
+        )
+    try:
+        # Boucle visible et montrable : chaque round est un appel provider.
         for round_number in range(1, max_rounds + 1):
             if round_event_sink is not None:
                 await round_event_sink(
@@ -208,47 +235,56 @@ async def run_agent_loop(
             started = time.monotonic()
 
             async def _call(msgs: list[dict[str, Any]]):
+                tool_choice: Any = "auto" if tool_schemas else None
+                if tool_schemas and forced_tool is not None:
+                    # Forçage d'outil : garantit l'obtention des preuves
+                    # obligatoires auprès d'un modèle qui ne les demande pas.
+                    tool_choice = {
+                        "type": "function",
+                        "function": {"name": forced_tool},
+                    }
                 if stream_final_envelope:
                     return await stream_chat_completion(
-                        client,
-                        model=settings.minimax_model,
+                        provider,
                         messages=msgs,
                         max_completion_tokens=output_budget,
                         temperature=0.3,
                         n=1,
                         tools=tool_schemas,
-                        tool_choice="auto" if tool_schemas else None,
+                        tool_choice=tool_choice,
                         settings=settings,
                         live_sink=response_event_sink,
                         response_role=agent_role,
                     )
-                kwargs: dict[str, Any] = {
-                    "model": settings.minimax_model,
-                    "messages": msgs,
-                    "max_completion_tokens": output_budget,
-                    "temperature": 0.3,
-                    "n": 1,
-                    "extra_body": {"thinking": {"type": "disabled"}},
-                }
-                if tool_schemas:
-                    kwargs["tools"] = tool_schemas
-                    kwargs["tool_choice"] = "auto"
-                return await client.chat.completions.create(**kwargs)
+                return await provider.complete(
+                    messages=msgs,
+                    max_output_tokens=output_budget,
+                    temperature=0.3,
+                    n=1,
+                    tools=tool_schemas,
+                    tool_choice=tool_choice,
+                    response_format=None,
+                )
 
             try:
                 completion = await _call(messages)
             except LiveSinkError:
-                # Une panne SQLite/UI dans le sink n'est pas une panne MiniMax.
+                # Une panne SQLite/UI dans le sink n'est pas une panne provider.
                 # L'appelant la trace comme erreur interne.
                 raise
-            except Exception as exc:  # noqa: BLE001 - toute cause mène au 502
+            except ProviderError:
+                # Cause fournisseur DÉJÀ normalisée (auth, 429, timeout, modèle,
+                # protocole) : on la propage telle quelle, sans la maquiller.
+                raise
+            except Exception as exc:  # noqa: BLE001 - panne provider générique
                 round_latency_ms = int((time.monotonic() - started) * 1000)
                 total_latency_ms += round_latency_ms
                 await emit_round_completed(
                     round_number, "provider_error", round_latency_ms
                 )
                 raise ProviderError(
-                    f"MiniMax agent request failed: {exc.__class__.__name__}"
+                    "provider_unavailable",
+                    f"Provider agent request failed: {exc.__class__.__name__}",
                 ) from exc
             record_usage(completion)
 
@@ -264,6 +300,10 @@ async def run_agent_loop(
             message = completion.choices[0].message
             tool_calls = message.tool_calls or []
             finish_reason = getattr(completion.choices[0], "finish_reason", None)
+            if tool_calls:
+                # Le modèle a répondu à la demande d'outil : on relâche le
+                # forçage (il sera réarmé au tour suivant si nécessaire).
+                forced_tool = None
 
             if stream_final_envelope:
                 if completion.protocol_error is not None:
@@ -335,6 +375,10 @@ async def run_agent_loop(
                         stop = True
                         stop_reason = "max_rounds_reached"
                         break
+                    # Force l'outil obligatoire au tour suivant : un modèle qui
+                    # « croit » avoir déjà mesuré sans appeler d'outil ne peut
+                    # plus contourner les preuves.
+                    forced_tool = missing_required[0]
                     messages.append(
                         {
                             "role": "assistant",
@@ -345,10 +389,11 @@ async def run_agent_loop(
                         {
                             "role": "user",
                             "content": (
-                                "Ta conclusion est prématurée. Demande maintenant, "
-                                "sans conclure, le prochain outil obligatoire manquant : "
-                                + ", ".join(missing_required)
-                                + ". Un seul outil par tour."
+                                "Ta conclusion est prématurée : tu n'as PAS encore "
+                                "appelé l'outil obligatoire "
+                                + missing_required[0]
+                                + ". Tu ne dois pas prétendre l'avoir fait. "
+                                "Appelle-le MAINTENANT (un seul outil, sans conclure)."
                             ),
                         }
                     )
@@ -358,7 +403,7 @@ async def run_agent_loop(
                     await emit_round_completed(
                         round_number, "provider_error", round_latency_ms
                     )
-                    raise ProviderError("MiniMax agent returned an empty answer")
+                    raise ProviderError("Provider agent returned an empty answer")
                 answer = final_json or content
                 await emit_round_completed(
                     round_number, "final_response", round_latency_ms
@@ -613,13 +658,16 @@ async def run_agent_loop(
 
             if stop:
                 break
+    finally:
+        if created_provider:
+            await provider.close()
 
     usage = ExecutionUsage(
         input_tokens=total_input if any_usage else None,
         output_tokens=total_output if any_usage else None,
         total_tokens=total_tokens if any_usage else None,
         estimated_cost_usd=(
-            toolkit.estimated_cost_usd(settings, total_input, total_output)
+            toolkit.estimated_cost_usd(pricing, total_input, total_output)
             if any_usage
             else None
         ),
@@ -659,11 +707,25 @@ def _append_trace_error(
 
 
 async def run_agent(
-    instruction: str, document: str, settings: Settings | None = None
+    instruction: str,
+    document: str,
+    settings: Settings | None = None,
+    *,
+    provider_id: str = "minimax",
+    model: str | None = None,
+    api_key: str | None = None,
 ) -> AgentResponse:
-    """Wrapper Palier 3 — signature publique et tests préservés."""
+    """Wrapper Palier 3 — signature publique et tests préservés.
+
+    `api_key` (BYOK) a priorité ; à défaut le credential serveur n'est
+    utilisé que si `allow_server_provider_credentials` le permet."""
     current = settings if settings is not None else get_settings()
     session = AgentSession(document=document)
+    session.provider_id = provider_id
+    session.model_id = model or current.minimax_model
+    session.pricing = provider_pricing(
+        current, provider_id, model or current.minimax_model
+    )
     result = await run_agent_loop(
         [
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -674,6 +736,9 @@ async def run_agent(
         max_rounds=max(1, current.minimax_max_tool_rounds),
         agent_role="assistant",
         get_connection=None,
+        provider_id=provider_id,
+        model=model,
+        api_key=api_key,
     )
     if result.answer is None:
         if result.rounds >= max(1, current.minimax_max_tool_rounds):
@@ -690,7 +755,7 @@ async def run_agent(
         answer = result.answer
     return AgentResponse(
         answer=answer,
-        model=current.minimax_model,
+        model=model or current.minimax_model,
         trace=result.trace,
         usage=result.usage,
     )

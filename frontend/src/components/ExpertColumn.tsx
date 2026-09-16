@@ -43,7 +43,7 @@ export function ExpertColumn({ role, run, live }: ExpertColumnProps) {
         <p className="live-status" aria-live="polite">
           {interrupted && 'Réponse interrompue — non validée.'}
           {!interrupted && runFailed && 'Aucune sortie validée.'}
-          {!interrupted && !runFailed && streaming && hasDraft && 'Génération MiniMax en direct — validation en attente'}
+          {!interrupted && !runFailed && streaming && hasDraft && 'Génération en direct — validation en attente'}
           {!interrupted && !runFailed && !streaming && awaitingValidation && 'Brouillon reçu — validation en attente'}
           {!interrupted &&
             !runFailed &&
