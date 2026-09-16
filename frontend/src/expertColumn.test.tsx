@@ -63,7 +63,7 @@ describe('ExpertColumn — rendu live', () => {
       />,
     )
     expect(html).toContain('Le texte arrive au fil de l’eau')
-    expect(html).toContain('Génération MiniMax en direct — validation en attente')
+    expect(html).toContain('Génération en direct — validation en attente')
     expect(html).toContain('live-cursor')
   })
 

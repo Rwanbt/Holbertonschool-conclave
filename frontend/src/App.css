@@ -1175,3 +1175,162 @@
 .why-tool-status--running {
   color: var(--text-muted);
 }
+
+/* ---------------------------------------------------------------------------
+ * Panneau « Fournisseur IA » — BYOK
+ * ------------------------------------------------------------------------- */
+
+.provider-panel {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--surface);
+}
+
+.provider-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.provider-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.provider-status {
+  font-size: 0.85rem;
+  font-weight: 700;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.provider-status--connected {
+  background-color: var(--success-bg);
+  color: var(--success-fg);
+}
+
+.provider-status--unverified,
+.provider-status--testing {
+  background-color: var(--warning-bg, var(--border));
+  color: var(--text-secondary);
+}
+
+.provider-status--error {
+  background-color: var(--danger-bg, var(--border));
+  color: var(--danger-fg);
+}
+
+.provider-status--disconnected {
+  color: var(--text-muted);
+}
+
+.provider-note {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.provider-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.75rem;
+  margin: 0.75rem 0;
+}
+
+.provider-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.provider-field select,
+.provider-field input {
+  font: inherit;
+  font-weight: 400;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--surface);
+  color: var(--text);
+}
+
+.provider-field input[type='password'],
+.provider-field input[type='text'] {
+  width: 100%;
+}
+
+.provider-field--key {
+  grid-column: 1 / -1;
+}
+
+.provider-key-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.provider-key-row input {
+  flex: 1;
+}
+
+.provider-key-toggle {
+  flex-shrink: 0;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--surface);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.provider-actions {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.provider-actions button {
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background-color: var(--surface);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.provider-actions button:disabled {
+  background-color: var(--surface-muted);
+  cursor: wait;
+}
+
+.provider-message {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.provider-disclosure {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background-color: var(--surface-subtle);
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.provider-actions .provider-oauth {
+  background-color: var(--accent, var(--surface));
+  color: var(--accent-fg, inherit);
+  border-color: var(--accent, var(--border-strong));
+}
+
+.provider-actions .provider-oauth-connected {
+  background-color: var(--success-bg);
+  color: var(--success-fg);
+}

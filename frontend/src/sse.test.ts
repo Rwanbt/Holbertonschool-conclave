@@ -1,94 +1,106 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { openAnalysisEventSource } from './api/sse'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { dispatchEvent, openAnalysisEventSource } from './api/sse'
 import { SSE_EVENT_TYPES } from './validation'
 import type { AnalysisEvent } from './types'
 
-class RecordingEventSource {
-  static last: RecordingEventSource | null = null
-  url: string
-  onopen: (() => void) | null = null
-  onerror: (() => void) | null = null
-  readonly registered = new Set<string>()
-  private handlers: Record<string, ((e: { data: string; lastEventId: string; type: string }) => void)[]> = {}
-
-  constructor(url: string) {
-    this.url = url
-    RecordingEventSource.last = this
+function payloadFor(type: string): Record<string, unknown> {
+  if (type === 'agent.response.delta') {
+    return { analysis_id: 'a1', role: 'avocat', sequence: 1, delta: 'ok' }
   }
-
-  addEventListener(
-    type: string,
-    handler: (e: { data: string; lastEventId: string; type: string }) => void,
-  ): void {
-    this.registered.add(type)
-    ;(this.handlers[type] ??= []).push(handler)
+  if (type === 'agent.response.started' || type === 'agent.response.completed') {
+    return { analysis_id: 'a1', role: 'avocat' }
   }
-
-  close(): void {}
-
-  /** Reproduit le comportement réel du navigateur : un événement NOMMÉ n'est
-   * remis qu'aux écouteurs de ce type exact ; `message` ne reçoit que les
-   * événements sans champ `event:`. */
-  dispatchNamed(type: string, id: number, data: Record<string, unknown>): boolean {
-    const handlers = this.handlers[type]
-    if (!handlers || handlers.length === 0) {
-      return false
-    }
-    for (const handler of handlers) {
-      handler({ data: JSON.stringify(data), lastEventId: String(id), type })
-    }
-    return true
+  if (type === 'agent.response.failed') {
+    return { analysis_id: 'a1', role: 'avocat', error_code: 'protocol_error' }
   }
+  return { analysis_id: 'a1' }
 }
 
-describe('openAnalysisEventSource — couverture des types d’événements', () => {
-  beforeEach(() => {
-    RecordingEventSource.last = null
-    vi.stubGlobal('EventSource', RecordingEventSource)
+describe('dispatchEvent — parseur SSE correct', () => {
+  it('délivre réellement CHAQUE type du contrat SSE', () => {
+    const received: AnalysisEvent[] = []
+    const malformed: string[] = []
+    SSE_EVENT_TYPES.forEach((type, index) => {
+      const raw =
+        `id: ${index + 1}\n` +
+        `event: ${type}\n` +
+        `data: ${JSON.stringify(payloadFor(type))}\n`
+      dispatchEvent(raw, (event) => received.push(event), (d) => malformed.push(d))
+    })
+    expect(malformed).toEqual([])
+    expect(received.map((event) => event.type)).toEqual([...SSE_EVENT_TYPES])
   })
 
+  it('reconstitue un data multi-lignes', () => {
+    const received: AnalysisEvent[] = []
+    dispatchEvent(
+      'id: 7\nevent: analysis.created\ndata: {"analysis_id":\ndata: "a1"}',
+      (event) => received.push(event),
+      () => {},
+    )
+    expect(received).toHaveLength(1)
+    expect(received[0].payload).toEqual({ analysis_id: 'a1' })
+  })
+
+  it('ignore les commentaires et remonte un JSON invalide', () => {
+    const malformed: string[] = []
+    dispatchEvent(': keep-alive', () => {}, (d) => malformed.push(d))
+    dispatchEvent('id: 1\nevent: analysis.created\ndata: {oops', () => {}, (d) =>
+      malformed.push(d),
+    )
+    expect(malformed).toEqual(['Le serveur a envoyé un événement non-JSON.'])
+  })
+})
+
+describe('openAnalysisEventSource — fetch + ReadableStream', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  function open(onEvent: (event: AnalysisEvent) => void = () => {}) {
-    return openAnalysisEventSource('a1', 0, {
-      onOpen: () => {},
-      onEvent,
+  it('lit un flux SSE et transmet les événements', async () => {
+    const encoder = new TextEncoder()
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'id: 1\nevent: analysis.created\ndata: {"analysis_id":"a1"}\n\n',
+          ),
+        )
+        controller.enqueue(
+          encoder.encode(
+            'id: 2\nevent: analysis.completed\ndata: {"analysis_id":"a1","status":"completed"}\n\n',
+          ),
+        )
+        controller.close()
+      },
+    })
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(body, { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const events: AnalysisEvent[] = []
+    const opened = { value: false }
+    const errored = { value: false }
+    openAnalysisEventSource('a1', 0, {
+      onOpen: () => {
+        opened.value = true
+      },
+      onEvent: (event) => events.push(event),
       onMalformed: () => {},
-      onError: () => {},
-    })
-  }
-
-  it('enregistre un écouteur pour CHAQUE type du contrat SSE', () => {
-    open()
-    const source = RecordingEventSource.last!
-    const missing = SSE_EVENT_TYPES.filter((type) => !source.registered.has(type))
-    // Un type émis par le backend mais non écouté est jeté SILENCIEUSEMENT par
-    // le navigateur : ni erreur, ni onMalformed. C'est exactement le bug qui
-    // faisait disparaître analysis.started et agent.round.* de l'interface.
-    expect(missing).toEqual([])
-  })
-
-  it('délivre réellement les événements de cycle de vie et de tours agentiques', () => {
-    const received: AnalysisEvent[] = []
-    open((event) => received.push(event))
-    const source = RecordingEventSource.last!
-
-    const cases: Array<[string, Record<string, unknown>]> = [
-      ['analysis.created', { analysis_id: 'a1' }],
-      ['analysis.started', { analysis_id: 'a1', started_at: 't' }],
-      ['agent.round.started', { analysis_id: 'a1', role: 'avocat', round: 1, max_rounds: 5 }],
-      ['agent.round.completed', { analysis_id: 'a1', role: 'avocat', round: 1, outcome: 'final_response', latency_ms: 12 }],
-      ['expert.started', { analysis_id: 'a1', role: 'avocat' }],
-      ['analysis.completed', { analysis_id: 'a1', status: 'completed' }],
-    ]
-
-    cases.forEach(([type, payload], index) => {
-      const delivered = source.dispatchNamed(type, index + 1, payload)
-      expect(delivered, `aucun écouteur enregistré pour ${type}`).toBe(true)
+      onError: () => {
+        errored.value = true
+      },
     })
 
-    expect(received.map((event) => event.type)).toEqual(cases.map(([type]) => type))
+    await vi.waitFor(() => expect(events.length).toBe(2))
+    expect(opened.value).toBe(true)
+    expect(events[0].type).toBe('analysis.created')
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/analyses/a1/events?after=0'),
+      expect.objectContaining({ credentials: 'include' }),
+    )
+    // Fin de flux après un événement terminal : pas d'erreur parasite.
+    expect(errored.value).toBe(true)
   })
 })

@@ -1,19 +1,26 @@
-"""Application FastAPI CONCLAVE — Palier 1 à 4.
+"""Application FastAPI CONCLAVE — Palier 1 à 4 + production BYOK multi-provider.
 
 Routes :
-- GET  /api/health              -> {"status": "ok"}
-- POST /api/p2/llm              -> tuyau seul MiniMax (jalon temporaire)
-- POST /api/p3/agent            -> boucle agent P3 (jalon temporaire)
-- POST /api/analyses            -> lance une analyse (201, SSE ensuite)
-- GET  /api/analyses/{id}       -> snapshot persistant de l'analyse
-- GET  /api/analyses/{id}/events-> flux SSE rejouable des événements
-- GET  /api/tools               -> catalogue des outils + états persistés
-- POST /api/tool-commands       -> grammaire /tools (enable|disable)
+- GET  /api/health                    -> {"status": "ok"}
+- GET  /api/providers                 -> registre public des providers/modèles
+- POST /api/providers/test-connection -> test de clé BYOK (sans jeter de tokens)
+- POST /api/p2/llm                    -> tuyau seul (jalon temporaire)
+- POST /api/p3/agent                  -> boucle agent P3 (jalon temporaire)
+- POST /api/analyses                  -> crée une analyse (201, sélection figée)
+- POST /api/analyses/{id}/start       -> démarre avec le credential runtime BYOK
+- GET  /api/analyses/{id}             -> snapshot persistant de l'analyse
+- GET  /api/analyses/{id}/events      -> flux SSE rejouable des événements
+- GET  /api/tools                     -> catalogue des outils (defaults)
+- POST /api/tool-commands             -> grammaire /tools (enable|disable local)
 
-Les analyses tournent en tâches de fond conservées dans `app.state`
-(`analysis_tasks`) : un rafraîchissement du navigateur n'annule jamais le
-backend. Le document peut être transmis à MiniMax pour les rôles experts/
-arbitre (SPEC) mais n'est jamais journalisé.
+Sécurité :
+- chaque analyse est isolée par session anonyme signée (cookie HttpOnly) :
+  les routes de lecture/écriture vérifient le propriétaire (404 sinon) ;
+- le credential provider BYOK vit uniquement en mémoire, transité au `/start`,
+  JAMAIS persisté, loggué, diffusé ou renvoyé ;
+- la configuration des outils et la sélection provider sont figées à la
+  création de l'analyse et ne changent jamais ensuite ;
+- les analyses tournent en tâches de fond conservées dans `app.state`.
 """
 
 from __future__ import annotations
@@ -24,12 +31,18 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
-from . import agent, db, experts, llm, security, toolkit
+from . import agent, db, experts, llm, oauth, redact, security, sessions, toolkit
 from .config import Settings, get_settings
+from .providers import (
+    ProviderError,
+    build_provider,
+    create_adapter,
+    list_provider_specs,
+)
 from .schemas import (
     AgentRequest,
     AgentResponse,
@@ -43,22 +56,19 @@ from .schemas import (
     ExpertRunView,
     LLMRequest,
     LLMResponse,
-    SecurityReport,
+    ProviderCatalogResponse,
+    ProviderInfo,
+    ProviderModelInfo,
+    StartAnalysisRequest,
     StartAnalysisResponse,
+    SecurityReport,
+    TestConnectionRequest,
+    TestConnectionResponse,
     ToolCatalogResponse,
     ToolCommandRequest,
     ToolCommandResponse,
     ToolConfiguration,
 )
-
-app = FastAPI(
-    title="CONCLAVE backend",
-    description="Validation d'entrée + passerelle MiniMax M3.",
-    version="0.1.0",
-)
-
-_boot_settings = get_settings()
-
 
 def _parse_origins(value: str) -> list[str]:
     return [origin.strip() for origin in value.split(",") if origin.strip()]
@@ -86,18 +96,22 @@ async def lifespan(app_obj: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="CONCLAVE backend",
-    description="Validation d'entrée + passerelle MiniMax M3.",
-    version="0.1.0",
+    description="Validation d'entrée + orchestrateur multi-provider BYOK.",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
+_boot_settings = get_settings()
 
+# CORS production : origines explicites uniquement (jamais `*` avec
+# credentials). Le cookie de session exige `allow_credentials=True` et
+# l'en-tête Authorization/Content-Type autorisé.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_parse_origins(_boot_settings.frontend_origin),
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_origins=_parse_origins(_boot_settings.frontend_origins),
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Session-Token"],
 )
 
 #: Le document est plafonné à 12 000 caractères (Pydantic). Mais Pydantic ne
@@ -196,9 +210,214 @@ async def get_db(settings: Settings = Depends(get_settings)):
         yield conn
 
 
+def _session_token_from_request(request: Request, settings: Settings) -> str | None:
+    """Token de session : en-tête `X-Session-Token` d'abord (transport
+    cross-site, indépendant du SameSite du cookie), puis cookie signé."""
+    header_token = request.headers.get("x-session-token")
+    if header_token and header_token.strip():
+        return header_token.strip()
+    raw = request.cookies.get(settings.session_cookie_name)
+    if not raw:
+        return None
+    return sessions.unsign_session(raw, settings)
+
+
+def _owns_analysis(row: Any, session_token: str | None) -> bool:
+    """L'utilisateur courant est-il propriétaire de cette analyse ?"""
+    if session_token is None:
+        return False
+    return row["owner_session"] == session_token
+
+
+def _validate_selection(
+    settings: Settings, provider_id: str, model_id: str | None
+) -> tuple[str, str]:
+    """Valide le provider/modèle contre le registre ; renvoie (provider, model)."""
+    spec = next(
+        (item for item in list_provider_specs() if item["provider_id"] == provider_id),
+        None,
+    )
+    if spec is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Fournisseur inconnu : {provider_id}.",
+        )
+    if model_id is None:
+        model_id = spec["models"][0]["model_id"]
+    if model_id not in {model["model_id"] for model in spec["models"]}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Modèle {model_id} non autorisé pour {provider_id}.",
+        )
+    return provider_id, model_id
+
+
 @app.get("/api/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/api/session")
+async def create_session(
+    response: Response,
+    request_http: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Établit (ou confirme) la session anonyme : le cookie est posé (mode
+    même-site) et le token est RENVOYÉ pour être transporté en en-tête
+    `X-Session-Token` (mode cross-site, Netlify ↔ backend)."""
+    existing = _session_token_from_request(request_http, settings)
+    token = existing if existing is not None else sessions.new_session_token()
+    response.set_cookie(
+        settings.session_cookie_name,
+        sessions.sign_session(token, settings),
+        **sessions.cookie_attributes(settings),
+    )
+    return {"status": "ok", "session_token": token}
+
+
+@app.get("/api/providers", response_model=ProviderCatalogResponse)
+async def list_providers(
+    settings: Settings = Depends(get_settings),
+) -> ProviderCatalogResponse:
+    specs = list_provider_specs()
+    providers = [
+        ProviderInfo(
+            provider_id=spec["provider_id"],
+            label=spec["label"],
+            auth_modes=spec["auth_modes"],
+            supports_tools=spec["supports_tools"],
+            supports_streaming=spec["supports_streaming"],
+            supports_structured_output=spec["supports_structured_output"],
+            supports_reasoning=spec["supports_reasoning"],
+            oauth_supported=oauth.oauth_supported(spec["provider_id"]),
+            oauth_configured=oauth.oauth_available(spec["provider_id"], settings),
+            models=[
+                ProviderModelInfo(**model)
+                for model in spec["models"]
+            ],
+        )
+        for spec in specs
+    ]
+    return ProviderCatalogResponse(providers=providers)
+
+
+@app.get("/api/oauth/{provider_id}/status")
+async def oauth_status(
+    provider_id: str,
+    request_http: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    session_token = _session_token_from_request(request_http, settings)
+    connected = bool(
+        session_token and oauth.get_token(session_token, provider_id)
+    )
+    return {
+        "provider_id": provider_id,
+        "supported": oauth.oauth_supported(provider_id),
+        "configured": oauth.oauth_available(provider_id, settings),
+        "connected": connected,
+    }
+
+
+@app.get("/api/oauth/{provider_id}/start")
+async def oauth_start(
+    provider_id: str,
+    request_http: Request,
+    session: str | None = None,
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    """Démarre le flux OAuth officiel (Google Gemini). Redirige vers Google.
+
+    `session` (query) porte le jeton de session du frontend : le jeton OAuth
+    obtenu lui sera rattaché, afin que l'analyse (transportée par le même
+    jeton) retrouve le credential. À défaut, on retombe sur le cookie/en-tête.
+    """
+    if not oauth.oauth_available(provider_id, settings):
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth non disponible pour ce fournisseur (non supporté ou non configuré).",
+        )
+    session_token = (
+        session.strip()
+        if session and session.strip()
+        else _session_token_from_request(request_http, settings)
+    )
+    if session_token is None:
+        session_token = sessions.new_session_token()
+    state = sessions.sign_session(oauth.new_state(session_token), settings)
+    return RedirectResponse(oauth.build_authorize_url(state, settings))
+
+
+@app.get("/api/oauth/{provider_id}/callback")
+async def oauth_callback(
+    provider_id: str,
+    code: str,
+    state: str,
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    """Callback OAuth : échange le code, stocke le jeton EN MÉMOIRE serveur."""
+    target = settings.oauth_frontend_redirect
+    if not oauth.oauth_available(provider_id, settings):
+        return RedirectResponse(f"{target}/?oauth=error&reason=unavailable")
+    payload = sessions.unsign_session(state, settings)
+    if not payload or ":" not in payload:
+        return RedirectResponse(f"{target}/?oauth=error&reason=invalid_state")
+    session_token = payload.split(":", 1)[0]
+    try:
+        token = await oauth.exchange_google_code(code, settings)
+    except oauth.OAuthError:
+        return RedirectResponse(f"{target}/?oauth=error&reason=exchange_failed")
+    access_token = token["access_token"]
+    redact.register_secret(access_token)
+    oauth.store_token(
+        session_token,
+        provider_id,
+        access_token,
+        float(token.get("expires_in") or 3600),
+    )
+    return RedirectResponse(f"{target}/?oauth=success&provider={provider_id}")
+
+
+@app.post("/api/oauth/{provider_id}/disconnect")
+async def oauth_disconnect(
+    provider_id: str,
+    request_http: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    session_token = _session_token_from_request(request_http, settings)
+    if session_token is not None:
+        oauth.delete_token(session_token, provider_id)
+    return {"provider_id": provider_id, "connected": False}
+
+
+@app.post(
+    "/api/providers/test-connection",
+    response_model=TestConnectionResponse,
+)
+async def test_provider_connection(
+    request: TestConnectionRequest,
+) -> TestConnectionResponse:
+    redact.register_secret(request.api_key)
+    adapter = create_adapter(request.provider_id, request.model_id, request.api_key)
+    try:
+        message = await adapter.test_connection()
+    except ProviderError as exc:
+        return TestConnectionResponse(
+            provider_id=request.provider_id,
+            model_id=request.model_id,
+            ok=False,
+            message=redact.redact_text(str(exc)) or str(exc),
+            needs_inference=exc.code == "provider_verification_unavailable",
+        )
+    finally:
+        await adapter.close()
+    return TestConnectionResponse(
+        provider_id=request.provider_id,
+        model_id=request.model_id,
+        ok=True,
+        message=message,
+    )
 
 
 @app.post("/api/p2/llm", response_model=LLMResponse)
@@ -206,20 +425,18 @@ async def p2_llm(
     request: LLMRequest,
     settings: Settings = Depends(get_settings),
 ) -> LLMResponse | JSONResponse:
-    if not settings.minimax_api_key:
+    if not _server_credential_available(settings, "minimax"):
         return JSONResponse(
             status_code=500,
-            content={"detail": "MINIMAX_API_KEY is not configured on the server"},
+            content={"detail": "Aucune clé API configurée côté serveur pour ce jalon."},
         )
 
     try:
         answer = await llm.generate_answer(request.message, settings)
-    except llm.ProviderError:
+    except ProviderError:
         return JSONResponse(
             status_code=502,
-            content={
-                "detail": "MiniMax provider unavailable or returned an unusable answer"
-            },
+            content={"detail": "Provider unavailable or returned an unusable answer"},
         )
 
     return LLMResponse(answer=answer, model=settings.minimax_model)
@@ -230,21 +447,31 @@ async def p3_agent(
     request: AgentRequest,
     settings: Settings = Depends(get_settings),
 ) -> AgentResponse | JSONResponse:
-    if not settings.minimax_api_key:
+    if not _server_credential_available(settings, "minimax"):
         return JSONResponse(
             status_code=500,
-            content={"detail": "MINIMAX_API_KEY is not configured on the server"},
+            content={"detail": "Aucune clé API configurée côté serveur pour ce jalon."},
         )
 
     try:
         return await agent.run_agent(request.instruction, request.document, settings)
-    except llm.ProviderError:
+    except ProviderError:
         return JSONResponse(
             status_code=502,
-            content={
-                "detail": "MiniMax provider unavailable or returned an unusable answer"
-            },
+            content={"detail": "Provider unavailable or returned an unusable answer"},
         )
+
+
+def _server_credential_available(settings: Settings, provider_id: str) -> bool:
+    if not settings.allow_server_provider_credentials:
+        return False
+    keys = {
+        "minimax": settings.minimax_api_key,
+        "openai": settings.openai_api_key,
+        "anthropic": settings.anthropic_api_key,
+        "gemini": settings.gemini_api_key,
+    }
+    return bool(keys.get(provider_id))
 
 
 # ---------------------------------------------------------------------------
@@ -266,29 +493,49 @@ def _tool_configuration_from_rows(rows: list[Any]) -> ToolConfiguration:
 )
 async def create_analysis(
     request: AnalysisCreateRequest,
+    response: Response,
+    request_http: Request,
     settings: Settings = Depends(get_settings),
 ) -> AnalysisCreated | JSONResponse:
-    """Crée l'analyse en `queued` et fige sa configuration d'outils dans la
-    même transaction : AUCUNE tâche de fond n'est lancée ici. Le job ne
-    démarre qu'après `POST /api/analyses/{id}/start`, appelé par le
-    navigateur une fois le flux SSE ouvert (`EventSource.onopen`), afin que
-    l'utilisateur ne puisse jamais rater le tout début de l'exécution."""
-    if not settings.minimax_api_key:
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "MINIMAX_API_KEY is not configured on the server"},
+    """Crée l'analyse en `queued` et fige la sélection provider + outils dans
+    la même transaction : AUCUNE tâche de fond n'est lancée ici. Le job ne
+    démarre qu'après `POST /api/analyses/{id}/start`, appelé par le navigateur
+    une fois le flux SSE ouvert. Le credential BYOK n'est jamais présent ici."""
+    provider_id, model_id = _validate_selection(
+        settings, request.provider_id, request.model_id
+    )
+
+    if request.enabled_tools is not None:
+        unknown = set(request.enabled_tools) - set(toolkit.ALLOWED_TOOL_NAMES)
+        if unknown:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": (
+                        "Outils inconnus dans enabled_tools : "
+                        + ", ".join(sorted(unknown))
+                    )
+                },
+            )
+
+    session_token = _session_token_from_request(request_http, settings)
+    if session_token is None:
+        session_token = sessions.new_session_token()
+        response.set_cookie(
+            settings.session_cookie_name,
+            sessions.sign_session(session_token, settings),
+            **sessions.cookie_attributes(settings),
         )
 
     analysis_id = uuid.uuid4().hex
     now = db.utc_now_iso()
 
-    # Détection purement informative : elle ne bloque JAMAIS l'analyse (voir
-    # SECURITY.md — les défenses réelles sont structurelles). Elle sert à dire
-    # à l'utilisateur ce que le serveur a vu dans son document.
+    # Détection purement informative : elle ne bloque JAMAIS l'analyse.
     signals = security.detect_injection_signals(request.document)
 
     try:
         async with db.open_connection(settings.database_path) as conn:
+            await db.ensure_session_tool_states(conn, session_token)
             rows = await db.create_queued_analysis(
                 conn,
                 analysis_id=analysis_id,
@@ -297,6 +544,11 @@ async def create_analysis(
                 signals=signals,
                 max_active=settings.max_concurrent_analyses,
                 queued_ttl_seconds=settings.queued_analysis_ttl_seconds,
+                enabled_tools=request.enabled_tools,
+                owner_session=session_token,
+                provider_id=provider_id,
+                model_id=model_id,
+                max_active_per_session=settings.max_analyses_per_session,
             )
     except db.ActiveAnalysisLimitReached as exc:
         return JSONResponse(
@@ -309,12 +561,26 @@ async def create_analysis(
                 )
             },
         )
+    except db.SessionAnalysisLimitReached as exc:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": (
+                    f"Cette session a déjà {exc.active} analyses actives "
+                    f"(limite par session : {settings.max_analyses_per_session}). "
+                    "Attendez la fin d'une analyse ou repartez d'une nouvelle session."
+                )
+            },
+        )
     tool_configuration = _tool_configuration_from_rows(rows)
 
     return AnalysisCreated(
         analysis_id=analysis_id,
         status="queued",
         created_at=now,
+        provider_id=provider_id,
+        model_id=model_id,
+        session_token=session_token,
         tool_configuration=tool_configuration,
         security=SecurityReport(
             prompt_injection_suspected=bool(signals), signals=signals
@@ -328,32 +594,66 @@ async def create_analysis(
 )
 async def start_analysis(
     analysis_id: str,
+    request_http: Request,
+    request: StartAnalysisRequest | None = None,
     settings: Settings = Depends(get_settings),
 ) -> StartAnalysisResponse | JSONResponse:
     """Démarrage idempotent : compare-and-set SQL `queued` -> `running`.
 
-    Seule la requête qui a réellement effectué la transition lance la tâche
-    de fond ; les suivantes (double-clic, onglet dupliqué, F5 pendant la
-    course) constatent `already_started=True` sans rien recréer. Un
-    rechargement de page ne relance donc jamais un job en cours."""
+    Le credential BYOK (`api_key`) est reçu ici, enregistré pour la redaction,
+    VALIDÉ (adapter construit) puis transmis EN MÉMOIRE à la tâche
+    `run_analysis` ; il n'est jamais persisté, diffusé, loggué ou renvoyé.
+    Un credential absent/invalide échoue proprement ici (400) SANS transition :
+    l'analyse reste `queued` et l'utilisateur peut reconnecter puis réessayer."""
+    session_token = _session_token_from_request(request_http, settings)
     async with db.open_connection(settings.database_path) as conn:
         row = await db.get_analysis(conn, analysis_id)
-        if row is None:
+        if row is None or not _owns_analysis(row, session_token):
             raise HTTPException(status_code=404, detail="analysis not found")
         if row["status"] != "queued":
             return StartAnalysisResponse(
                 analysis_id=analysis_id, status=row["status"], already_started=True
             )
+        document = row["document"]
+        provider_id = row["provider_id"] or "minimax"
+        model_id = row["model_id"] or settings.minimax_model
+
+    api_key = request.api_key if request is not None else None
+    auth_mode = (request.auth_mode if request is not None else "api_key") or "api_key"
+    if not api_key and session_token is not None:
+        # Repli OAuth officiel (Google Gemini) : jeton stocké en mémoire serveur.
+        oauth_token = oauth.get_token(session_token, provider_id)
+        if oauth_token:
+            api_key = oauth_token
+            auth_mode = "oauth"
+    if api_key:
+        redact.register_secret(api_key)
+
+    try:
+        provider = build_provider(
+            provider_id=provider_id,
+            model_id=model_id,
+            api_key=api_key,
+            settings=settings,
+            auth_mode=auth_mode,
+        )
+    except ProviderError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": redact.redact_text(str(exc)) or str(exc)},
+        )
+
+    async with db.open_connection(settings.database_path) as conn:
         started_at = db.utc_now_iso()
         transitioned = await db.start_analysis(conn, analysis_id, started_at)
         if not transitioned:
             current = await db.get_analysis(conn, analysis_id)
+            await provider.close()
             return StartAnalysisResponse(
                 analysis_id=analysis_id,
                 status=current["status"] if current else "running",
                 already_started=True,
             )
-        document = row["document"]
 
     task = asyncio.create_task(
         experts.run_analysis(
@@ -361,6 +661,11 @@ async def start_analysis(
             document,
             settings,
             _connection_factory(settings),
+            provider_id=provider_id,
+            model=model_id,
+            api_key=api_key,
+            provider=provider,
+            auth_mode=auth_mode,
         )
     )
     app.state.analysis_tasks[analysis_id] = task
@@ -417,14 +722,30 @@ def _parse_usage(raw_json: str | None) -> ExecutionUsage:
         )
 
 
-@app.get("/api/analyses/{analysis_id}", response_model=AnalysisSnapshot)
-async def get_analysis_snapshot(
+async def _authorized_analysis(
     analysis_id: str,
-    conn: Any = Depends(get_db),
-) -> AnalysisSnapshot:
+    request: Request,
+    settings: Settings,
+    conn: Any,
+) -> Any:
+    """Charge une analyse et vérifie l'ownership (404 sinon)."""
     row = await db.get_analysis(conn, analysis_id)
     if row is None:
         raise HTTPException(status_code=404, detail="analysis not found")
+    session_token = _session_token_from_request(request, settings)
+    if not _owns_analysis(row, session_token):
+        raise HTTPException(status_code=404, detail="analysis not found")
+    return row
+
+
+@app.get("/api/analyses/{analysis_id}", response_model=AnalysisSnapshot)
+async def get_analysis_snapshot(
+    analysis_id: str,
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    conn: Any = Depends(get_db),
+) -> AnalysisSnapshot:
+    row = await _authorized_analysis(analysis_id, request, settings, conn)
 
     runs = await db.list_expert_runs(conn, analysis_id)
     views: dict[str, ExpertRunView] = {}
@@ -449,6 +770,8 @@ async def get_analysis_snapshot(
         started_at=row["started_at"],
         completed_at=row["completed_at"],
         error_code=row["error_code"],
+        provider_id=row["provider_id"],
+        model_id=row["model_id"],
         avocat=views["avocat"],
         procureur=views["procureur"],
         comptable=views["comptable"],
@@ -487,16 +810,14 @@ async def get_analysis_snapshot(
 )
 async def get_analysis_events_history(
     analysis_id: str,
+    request: Request,
     after: int = 0,
     limit: int = 500,
+    settings: Settings = Depends(get_settings),
     conn: Any = Depends(get_db),
 ) -> EventsHistoryResponse:
-    """Historique JSON paginé pour hydrater un F5 sans animation artificielle
-    (`readStoredLastEventId` reste une optimisation de reprise, jamais la
-    seule source : cet historique serveur est autoritaire)."""
-    row = await db.get_analysis(conn, analysis_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="analysis not found")
+    """Historique JSON paginé pour hydrater un F5 sans animation artificielle."""
+    await _authorized_analysis(analysis_id, request, settings, conn)
 
     bounded_limit = max(1, min(limit, 500))
     rows = await db.list_events_after(conn, analysis_id, max(0, after))
@@ -532,6 +853,9 @@ async def stream_analysis_events(
         row = await db.get_analysis(conn, analysis_id)
     if row is None:
         raise HTTPException(status_code=404, detail="analysis not found")
+    session_token = _session_token_from_request(request, settings)
+    if not _owns_analysis(row, session_token):
+        raise HTTPException(status_code=404, detail="analysis not found")
 
     after_id = 0
     last_event_id = request.headers.get("last-event-id")
@@ -558,7 +882,8 @@ async def stream_analysis_events(
             if current is None:
                 return
             for event in events:
-                yield _format_sse(event["id"], event["event_type"], json.loads(event["payload_json"]))
+                payload = json.loads(event["payload_json"])
+                yield _format_sse(event["id"], event["event_type"], payload)
                 sent = event["id"]
                 if event["event_type"] in db.TERMINAL_EVENTS:
                     return
@@ -581,8 +906,19 @@ async def stream_analysis_events(
 
 
 @app.get("/api/tools", response_model=ToolCatalogResponse)
-async def get_tools_catalog(conn: Any = Depends(get_db)) -> ToolCatalogResponse:
-    states = await db.list_tool_states(conn)
+async def get_tools_catalog(
+    request_http: Request,
+    settings: Settings = Depends(get_settings),
+    conn: Any = Depends(get_db),
+) -> ToolCatalogResponse:
+    """Catalogue des outils pour CETTE session (jamais celui d'un autre
+    utilisateur). Une session sans préférences hérite des defaults globaux."""
+    session_token = _session_token_from_request(request_http, settings)
+    if session_token is None:
+        states = await db.list_tool_states(conn)
+    else:
+        await db.ensure_session_tool_states(conn, session_token)
+        states = await db.list_session_tool_states(conn, session_token)
     return ToolCatalogResponse(
         tools=[toolkit.tool_state_from_row(row) for row in states]
     )
@@ -591,8 +927,24 @@ async def get_tools_catalog(conn: Any = Depends(get_db)) -> ToolCatalogResponse:
 @app.post("/api/tool-commands", response_model=ToolCommandResponse)
 async def apply_tool_command(
     request: ToolCommandRequest,
+    response: Response,
+    request_http: Request,
+    settings: Settings = Depends(get_settings),
     conn: Any = Depends(get_db),
 ) -> ToolCommandResponse:
+    """Commande `/tools` — préférence de CETTE session uniquement. La
+    configuration d'une analyse déjà créée reste immuable (`enabled_tools`
+    figé à la création)."""
+    session_token = _session_token_from_request(request_http, settings)
+    if session_token is None:
+        session_token = sessions.new_session_token()
+        response.set_cookie(
+            settings.session_cookie_name,
+            sessions.sign_session(session_token, settings),
+            **sessions.cookie_attributes(settings),
+        )
+    await db.ensure_session_tool_states(conn, session_token)
+
     try:
         action, tool_name = toolkit.parse_tool_command(request.command)
     except toolkit.ToolCommandSyntaxError as exc:
@@ -602,25 +954,25 @@ async def apply_tool_command(
         ) from exc
 
     if action == "list":
-        states = await db.list_tool_states(conn)
+        states = await db.list_session_tool_states(conn, session_token)
         tools = [toolkit.tool_state_from_row(row) for row in states]
         return ToolCommandResponse(
             action="list",
-            message="Catalogue des outils (états lus depuis tool_states).",
+            message="Catalogue des outils (préférences de cette session).",
             tool_name=None,
             enabled=None,
             tools=tools,
         )
 
     enabled = action == "enable"
-    await db.set_tool_state(conn, tool_name, enabled)
-    states = await db.list_tool_states(conn)
+    await db.set_session_tool_state(conn, session_token, tool_name, enabled)
+    states = await db.list_session_tool_states(conn, session_token)
     tools = [toolkit.tool_state_from_row(row) for row in states]
     return ToolCommandResponse(
         action=action,
         message=(
             f"Outil {tool_name} {'activé' if enabled else 'désactivé'} "
-            "(état persistant)."
+            "(préférence de cette session, figée par analyse)."
         ),
         tool_name=tool_name,
         enabled=enabled,

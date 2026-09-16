@@ -1,0 +1,48 @@
+name: Deploy Netlify
+
+# Déploiement du frontend sur Netlify, SANS aucun secret LLM.
+#
+# Prérequis (à définir une seule fois dans les secrets GitHub du dépôt) :
+#   - NETLIFY_AUTH_TOKEN : jeton personnel Netlify (User settings > Applications)
+#   - NETLIFY_SITE_ID    : identifiant du site Netlify cible
+#   - VITE_API_BASE_URL  : URL publique du backend ASGI (variable, pas un secret)
+#
+# Le backend FastAPI est déployé séparément (backend/Dockerfile) ; ce workflow
+# ne déploie QUE le frontend statique.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - "netlify.toml"
+      - ".github/workflows/netlify-deploy.yml"
+
+jobs:
+  deploy:
+    name: Build and deploy frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build (exact netlify.toml pipeline)
+        env:
+          VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
+        run: |
+          npm ci --prefix frontend
+          npm run build --prefix frontend
+
+      - name: Verify no secret leaked into the bundle
+        run: ./scripts/check-no-secrets.sh frontend/dist
+
+      - name: Deploy to Netlify (production)
+        run: npx netlify-cli@latest deploy --prod --dir frontend/dist
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}

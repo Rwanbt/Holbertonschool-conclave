@@ -17,7 +17,10 @@ _FAKE_MODEL = "MiniMax-M3"
 
 
 def _settings_with_key() -> Settings:
-    return Settings(minimax_api_key="sk-test-not-a-real-key")
+    return Settings(
+        minimax_api_key="sk-test-not-a-real-key",
+        allow_server_provider_credentials=True,
+    )
 
 
 def test_health_ok() -> None:

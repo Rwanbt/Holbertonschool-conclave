@@ -29,6 +29,7 @@ DOC = "Un document API soumis au backend."
 def _settings(tmp_path, **overrides) -> Settings:
     base = {
         "minimax_api_key": "sk-test-not-a-real-key",
+        "allow_server_provider_credentials": True,
         "minimax_max_tool_rounds": 3,
         "minimax_input_usd_per_million": 0.30,
         "minimax_output_usd_per_million": 1.20,
@@ -460,9 +461,13 @@ class TestPersistence:
 
             time.sleep(0.05)
 
-        # « Redémarrage » du backend sur la même base.
+        # « Redémarrage » du backend sur la même base. La session anonyme est
+        # rejouée (le cookie survit au F5 côté navigateur).
         app.dependency_overrides[get_settings] = lambda: settings
+        session_cookie = test_client.cookies.get("conclave_session")
         with TestClient(app) as reopened:
+            if session_cookie is not None:
+                reopened.cookies.set("conclave_session", session_cookie)
             snapshot = reopened.get(f"/api/analyses/{analysis_id}").json()
             assert snapshot["status"] == "completed"
             assert snapshot["document"] == DOC

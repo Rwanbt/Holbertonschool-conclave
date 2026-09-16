@@ -1,26 +1,23 @@
-"""Streaming natif MiniMax-M3 (carte bonus du Palier 4).
+"""Streaming des réponses finales des experts/Arbitre — indépendant du provider.
 
-MiniMax expose une API OpenAI-compatible : `stream=True` + le SDK `openai`
-fonctionnent tels quels. Deux particularités MiniMax gérées ici :
+Le `StreamCollector` consomme les deltas NORMALISÉS produits par les adapters
+(`ProviderChunk`, voir providers/types.py) : l'accumulation du texte, la
+déduplication des morceaux cumulatifs (particularité MiniMax gérée
+génériquement par `normalize_delta`) et le parsing de l'enveloppe
+`<LIVE_RESPONSE>…</LIVE_RESPONSE><FINAL_JSON>{…}</FINAL_JSON>` ne connaissent
+aucun format fournisseur.
 
-- `delta.content` peut être CUMULATIF (chaque morceau répète tout le texte déjà
-  produit) au lieu d'un vrai delta : il faut `normalize_delta` pour ne jamais
-  dupliquer (« Bonjour » → « BBoo… »).
-- la réponse finale d'un expert/arbitre est une ENVELOPPE
-  `<LIVE_RESPONSE>…</LIVE_RESPONSE><FINAL_JSON>{…}</FINAL_JSON>` parsée par un
-  automate à états qui tolère les marqueurs coupés entre deux morceaux.
-
-Le collecteur reconstruit, à partir des morceaux OpenAI, un objet
-« `StreamedCompletion` » du même type (choices/usage) que la réponse
-non-streamée : la boucle agent `run_agent_loop` peut donc traiter les deux
-formes avec le même code.
+Le collecteur reconstruit, à partir des morceaux, un objet
+« `StreamedCompletion` » (choices/usage) de la même forme que la réponse
+non-streamée d'un adapter (`ProviderResult`) : la boucle agent
+`run_agent_loop` peut donc traiter les deux formes avec le même code.
 
 Contrats respectés :
 - le texte live n'est JAMAIS la sortie validée : seule la section `FINAL_JSON`
   est extraite puis validée par Pydantic ;
 - le JSON final n'apparaît jamais dans les événements `agent.response.*` ;
-- pas de `reasoning_content`/`<think>` diffusé : `thinking` est désactivé via
-  `extra_body`, et l'enveloppe n'autorise pas de section de raisonnement ;
+- aucun raisonnement fournisseur n'est diffusé : chaque adapter décide de son
+  propre réglage (MiniMax désactive `thinking`, les autres ignorent) ;
 - le chunk final `choices=[]` + `usage` seul n'est pas jeté : il nourrit le
   compteur agrégé exactement une fois ;
 - un brouillon live est plafonné (`stream_max_draft_chars`) et émis par
@@ -35,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
 from .config import Settings
+from .providers.types import ProviderChunk, ProviderToolCallDelta
 
 LIVE_OPEN = "<LIVE_RESPONSE>"
 LIVE_CLOSE = "</LIVE_RESPONSE>"
@@ -103,8 +101,8 @@ class StreamedChoice:
 
 @dataclass
 class StreamedUsage:
-    prompt_tokens: int | None = None
-    completion_tokens: int | None = None
+    input_tokens: int | None = None
+    output_tokens: int | None = None
     total_tokens: int | None = None
 
 
@@ -355,34 +353,29 @@ class StreamCollector:
         self.final_json: str | None = None
         self.live_text = ""
 
-    async def feed(self, chunk: Any) -> None:
+    async def feed(self, chunk: ProviderChunk) -> None:
         self._raise_flush_task_error()
-        if getattr(chunk, "choices", None):
-            choice = chunk.choices[0]
-            delta = getattr(choice, "delta", None)
-            raw = (getattr(delta, "content", None) or "") if delta is not None else ""
-            if raw:
-                piece = normalize_delta(self.content, raw)
-                if piece:
-                    self.content += piece
-                    emitted = self._parser.feed(piece)
-                    await self._maybe_emit_started()
-                    if emitted:
-                        self.live_text += emitted
-                        self._live_buffer += emitted
-                        await self._flush_size()
-                        self._schedule_time_flush()
-            reason = getattr(choice, "finish_reason", None)
-            if reason:
-                self.finish_reason = reason
-            for tool_call in (getattr(delta, "tool_calls", None) or []) if delta is not None else []:
-                self._feed_tool_call(tool_call)
-        if getattr(chunk, "usage", None) is not None and self.usage is None:
-            usage = chunk.usage
+        content_delta = chunk.content_delta or ""
+        if content_delta:
+            piece = normalize_delta(self.content, content_delta)
+            if piece:
+                self.content += piece
+                emitted = self._parser.feed(piece)
+                await self._maybe_emit_started()
+                if emitted:
+                    self.live_text += emitted
+                    self._live_buffer += emitted
+                    await self._flush_size()
+                    self._schedule_time_flush()
+        if chunk.finish_reason:
+            self.finish_reason = chunk.finish_reason
+        for tool_call in chunk.tool_calls or []:
+            self._feed_tool_call(tool_call)
+        if chunk.usage is not None and self.usage is None:
             self.usage = StreamedUsage(
-                prompt_tokens=getattr(usage, "prompt_tokens", None),
-                completion_tokens=getattr(usage, "completion_tokens", None),
-                total_tokens=getattr(usage, "total_tokens", None),
+                input_tokens=chunk.usage.input_tokens,
+                output_tokens=chunk.usage.output_tokens,
+                total_tokens=chunk.usage.total_tokens,
             )
         await self._flush_time()
 
@@ -416,20 +409,17 @@ class StreamCollector:
             task.cancel()
         self._flush_task = None
 
-    def _feed_tool_call(self, tool_call: Any) -> None:
-        index = getattr(tool_call, "index", None)
-        if index is None:
-            return
+    def _feed_tool_call(self, tool_call: ProviderToolCallDelta) -> None:
+        index = tool_call.index
         assembler = self._tool_calls.get(index)
         if assembler is None:
             assembler = ToolCallAssembler(index)
             self._tool_calls[index] = assembler
             self._tool_order.append(index)
-        function = getattr(tool_call, "function", None)
         assembler.feed(
-            call_id=getattr(tool_call, "id", None),
-            name=getattr(function, "name", None) if function is not None else None,
-            arguments=getattr(function, "arguments", None) if function is not None else None,
+            call_id=tool_call.id,
+            name=tool_call.name,
+            arguments=tool_call.arguments,
         )
 
     async def _maybe_emit_started(self) -> None:
@@ -525,9 +515,8 @@ class StreamCollector:
 
 
 async def stream_chat_completion(
-    client: Any,
+    provider: Any,
     *,
-    model: str,
     messages: list[dict[str, Any]],
     max_completion_tokens: int,
     temperature: float,
@@ -538,24 +527,18 @@ async def stream_chat_completion(
     live_sink: LiveSink | None = None,
     response_role: str | None = None,
 ) -> StreamedCompletion:
-    """Appelle MiniMax en streaming et reconstitue la réponse complète."""
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "messages": messages,
-        "max_completion_tokens": max_completion_tokens,
-        "temperature": temperature,
-        "n": n,
-        "stream": True,
-        "stream_options": {"include_usage": True},
-        "extra_body": {"thinking": {"type": "disabled"}},
-    }
+    """Appelle le provider en streaming et reconstitue la réponse complète."""
     # Certains fournisseurs OpenAI-compatibles refusent `tools=[]` ou
     # `tool_choice=null`. Une analyse où tous les switches sont désactivés
     # reste donc une requête de chat valide, sans paramètres d'outils.
-    if tools:
-        kwargs["tools"] = tools
-        kwargs["tool_choice"] = tool_choice or "auto"
-    stream = await client.chat.completions.create(**kwargs)
+    stream = provider.stream_chat(
+        messages=messages,
+        max_output_tokens=max_completion_tokens,
+        temperature=temperature,
+        n=n,
+        tools=tools or None,
+        tool_choice=tool_choice if tools else None,
+    )
     collector = StreamCollector(settings, live_sink=live_sink, response_role=response_role)
     async for chunk in stream:
         await collector.feed(chunk)

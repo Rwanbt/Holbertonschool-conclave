@@ -32,10 +32,10 @@ from typing import Any, Awaitable, Callable
 
 from pydantic import ValidationError
 
-from . import db, security, toolkit
+from . import db, redact, security, toolkit
 from .agent import AgentLoopResult, AgentSession, run_agent_loop
 from .config import Settings
-from .llm import ProviderError, build_client
+from .providers import ProviderError, build_provider, provider_pricing
 from .schemas import (
     AgentOutput,
     AgentResponseCompleted,
@@ -291,7 +291,14 @@ class AnalysisResult:
 # sorties. Sans cet ordre, une coupure réseau était annoncée à l'utilisateur
 # comme « pas assez d'experts exploitables » — un mensonge.
 _FAILURE_PRIORITY: tuple[str, ...] = (
+    "provider_auth_failed",
+    "provider_rate_limited",
+    "provider_timeout",
+    "model_not_available",
+    "provider_capability_missing",
+    "provider_protocol_error",
     "provider_unavailable",
+    "provider_error",
     "internal_error",
     "expert_timeout",
     "protocol_error",
@@ -353,15 +360,16 @@ def _merge_usage(usages: list[ExecutionUsage]) -> ExecutionUsage:
 
 
 async def _repair_structured_output(
-    client,
+    provider: Any,
     messages: list[dict[str, Any]],
     settings: Settings,
     error_hint: str,
     schema: dict[str, Any],
     schema_name: str,
     max_output_tokens: int | None = None,
+    pricing: dict[str, Any] | None = None,
 ) -> tuple[str | None, ExecutionUsage]:
-    """Une seule tentative de réparation : nouvel appel MiniMax sans outils."""
+    """Une seule tentative de réparation : nouvel appel provider sans outils."""
     output_budget = max_output_tokens or settings.minimax_max_output_tokens
     # Le prompt métier initial exige une enveloppe live. Le conserver pendant
     # une réparation JSON crée deux consignes de format contradictoires. On le
@@ -389,36 +397,35 @@ async def _repair_structured_output(
     ]
     started = time.monotonic()
     try:
-        completion = await client.chat.completions.create(
-            model=settings.minimax_model,
+        completion = await provider.complete(
             messages=repair_messages,
-            max_completion_tokens=output_budget,
+            max_output_tokens=output_budget,
             temperature=0.0,
             n=1,
+            tools=None,
+            tool_choice=None,
             response_format={"type": "json_object"},
-            extra_body={"thinking": {"type": "disabled"}},
         )
-    except Exception as exc:  # noqa: BLE001 - cause fournisseur explicite
+    except ProviderError:
+        # Cause fournisseur normalisée (auth, 429, timeout…) : propagée telle
+        # quelle.
+        raise
+    except Exception as exc:  # noqa: BLE001 - panne provider générique
         raise ProviderError(
-            f"MiniMax structured repair failed: {exc.__class__.__name__}"
+            "provider_unavailable",
+            f"Structured repair failed: {exc.__class__.__name__}",
         ) from exc
     latency_ms = int((time.monotonic() - started) * 1000)
     raw_usage = completion.usage
-    input_tokens = (
-        (raw_usage.prompt_tokens or 0) if raw_usage is not None else None
-    )
-    output_tokens = (
-        (raw_usage.completion_tokens or 0) if raw_usage is not None else None
-    )
-    total_tokens = (
-        (raw_usage.total_tokens or 0) if raw_usage is not None else None
-    )
+    input_tokens = raw_usage.input_tokens if raw_usage is not None else None
+    output_tokens = raw_usage.output_tokens if raw_usage is not None else None
+    total_tokens = raw_usage.total_tokens if raw_usage is not None else None
     usage = ExecutionUsage(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         estimated_cost_usd=(
-            toolkit.estimated_cost_usd(settings, input_tokens or 0, output_tokens or 0)
+            toolkit.estimated_cost_usd(pricing, input_tokens or 0, output_tokens or 0)
             if raw_usage is not None
             else None
         ),
@@ -426,9 +433,12 @@ async def _repair_structured_output(
         llm_rounds=1,
     )
     if not completion.choices:
-        raise ProviderError("MiniMax structured repair returned no choices")
-    content = (completion.choices[0].message.content or "").strip()
-    return content or None, usage
+        raise ProviderError(
+            "provider_protocol_error",
+            "Structured repair returned no choices",
+        )
+    content = completion.content
+    return (content or "").strip() or None, usage
 
 
 async def run_expert(
@@ -441,15 +451,23 @@ async def run_expert(
     get_connection: Callable[[], Awaitable[Any]],
     allowed_tools: frozenset[str] | None = None,
     document_nonce: str = "",
+    provider: Any | None = None,
+    provider_id: str = "minimax",
+    model: str | None = None,
+    api_key: str | None = None,
 ) -> ExpertRunResult:
     """Exécute un expert : boucle d'outils puis sortie JSON validée (1 réparation).
 
     `allowed_tools` est la configuration IMMUABLE de l'analyse (lue une seule
     fois dans `analysis_tool_states` par l'orchestrateur) : elle seule décide
-    des schémas envoyés à MiniMax et de ce que `execute_tool` autorise.
+    des schémas envoyés au provider et de ce que `execute_tool` autorise.
+    `provider` (quand fourni) évite de reconstruire le client par rôle ;
+    sinon il est construit via `build_provider` avec le credential runtime.
     """
     run_id = uuid.uuid4().hex
     started_at = db.utc_now_iso()
+    resolved_model = model or settings.minimax_model
+    pricing = provider_pricing(settings, provider_id, resolved_model)
 
     async def emit(event_type: str, payload: dict[str, Any]) -> None:
         async with (await get_connection()) as conn:
@@ -588,6 +606,11 @@ async def run_expert(
             allowed_tools=role_allowed_tools,
             round_event_sink=round_sink,
             required_tools_before_final=required_tools_before_final,
+            provider=provider,
+            provider_id=provider_id,
+            model=model,
+            api_key=api_key,
+            pricing=pricing,
         )
 
     async def fail_run(
@@ -650,10 +673,23 @@ async def run_expert(
         )
     except asyncio.TimeoutError:
         return await fail_run("timeout", "expert_timeout", timed_out=True)
-    except ProviderError:
-        # Réseau coupé, clé invalide, 5xx MiniMax : la cause est CONNUE et
-        # doit être dite telle quelle, jamais traduite en autre chose.
-        return await fail_run("error", "provider_unavailable")
+    except ProviderError as exc:
+        # Réseau coupé, clé invalide, 5xx provider : la cause est CONNUE et
+        # doit être dite telle quelle (`provider_auth_failed`,
+        # `provider_rate_limited`, `provider_timeout`…), jamais maquillée.
+        detail = (redact.redact_text(exc.detail or str(exc)) or "")[:120] or None
+        logger.warning(
+            "expert %s provider error [%s]: %s (analysis %s)",
+            role,
+            exc.code,
+            detail,
+            analysis_id,
+        )
+        return await fail_run(
+            "error",
+            exc.code or "provider_unavailable",
+            error_detail=detail,
+        )
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 - jamais avalé : tracé puis nommé
@@ -700,73 +736,85 @@ async def run_expert(
                 error_detail = error_detail or _validation_error_detail(exc)
         if hint is not None:
             repair_hint = hint
+            repair_provider = provider
+            owns_repair_provider = repair_provider is None
+            if owns_repair_provider:
+                repair_provider = build_provider(
+                    provider_id=provider_id,
+                    model_id=model or settings.minimax_model,
+                    api_key=api_key,
+                    settings=settings,
+                )
             try:
-                async with build_client(settings) as client:
-                    for attempt in range(1, settings.structured_repair_attempts + 1):
-                        await emit(
-                            "agent.repair.started",
-                            {
-                                "analysis_id": analysis_id,
-                                "role": role,
-                                "attempt": attempt,
-                                "max_attempts": settings.structured_repair_attempts,
-                                "reason": error_detail or "schema_validation_error",
-                            },
-                        )
-                        repaired, repair_usage = await _repair_structured_output(
-                            client,
-                            messages,
-                            settings,
-                            repair_hint,
-                            AgentOutput.model_json_schema(),
+                for attempt in range(1, settings.structured_repair_attempts + 1):
+                    await emit(
+                        "agent.repair.started",
+                        {
+                            "analysis_id": analysis_id,
+                            "role": role,
+                            "attempt": attempt,
+                            "max_attempts": settings.structured_repair_attempts,
+                            "reason": error_detail or "schema_validation_error",
+                        },
+                    )
+                    repaired, repair_usage = await _repair_structured_output(
+                        repair_provider,
+                        messages,
+                        settings,
+                        repair_hint,
+AgentOutput.model_json_schema(),
                             "AgentOutput",
                             max_output_tokens=settings.expert_max_output_tokens,
+                            pricing=pricing,
                         )
-                        run_usage = _merge_usage([run_usage, repair_usage])
-                        repaired_data = (
-                            extract_structured_json(repaired) if repaired else None
-                        )
-                        if repaired_data is None:
-                            repair_hint = "la réparation n'est pas un objet JSON valide"
+                    run_usage = _merge_usage([run_usage, repair_usage])
+                    repaired_data = (
+                        extract_structured_json(repaired) if repaired else None
+                    )
+                    if repaired_data is None:
+                        repair_hint = "la réparation n'est pas un objet JSON valide"
+                    else:
+                        try:
+                            output = validate_agent_output(role, repaired_data)
+                        except ValidationError as exc:
+                            attempt_error_detail = _validation_error_detail(exc)
+                            repair_hint = (
+                                "erreurs de validation persistantes : "
+                                + str(exc.errors()[:3])
+                            )
+                            output = None
                         else:
-                            try:
-                                output = validate_agent_output(role, repaired_data)
-                            except ValidationError as exc:
-                                attempt_error_detail = _validation_error_detail(exc)
-                                repair_hint = (
-                                    "erreurs de validation persistantes : "
-                                    + str(exc.errors()[:3])
-                                )
+                            attempt_error_detail = None
+                            if role == "comptable" and any(
+                                tool not in loop_result.executed_tools
+                                for tool in required_comptable_tools
+                            ):
                                 output = None
-                            else:
-                                attempt_error_detail = None
-                                if role == "comptable" and any(
-                                    tool not in loop_result.executed_tools
-                                    for tool in required_comptable_tools
-                                ):
-                                    output = None
-                                    repair_hint = (
-                                        "les outils obligatoires du Comptable "
-                                        "n'ont pas tous été exécutés"
-                                    )
-                                    attempt_error_detail = "missing_required_tools"
-                        if repaired_data is None:
-                            attempt_error_detail = "invalid_json"
-                        await emit(
-                            "agent.repair.completed" if output is not None else "agent.repair.failed",
-                            {
-                                "analysis_id": analysis_id,
-                                "role": role,
-                                "attempt": attempt,
-                                "max_attempts": settings.structured_repair_attempts,
-                                "error_detail": None if output is not None else attempt_error_detail,
-                            },
-                        )
-                        if output is not None:
-                            break
-            except ProviderError:
+                                repair_hint = (
+                                    "les outils obligatoires du Comptable "
+                                    "n'ont pas tous été exécutés"
+                                )
+                                attempt_error_detail = "missing_required_tools"
+                    if repaired_data is None:
+                        attempt_error_detail = "invalid_json"
+                    await emit(
+                        "agent.repair.completed" if output is not None else "agent.repair.failed",
+                        {
+                            "analysis_id": analysis_id,
+                            "role": role,
+                            "attempt": attempt,
+                            "max_attempts": settings.structured_repair_attempts,
+                            "error_detail": None if output is not None else attempt_error_detail,
+                        },
+                    )
+                    if output is not None:
+                        break
+            except ProviderError as exc:
                 return await fail_run(
-                    "error", "provider_unavailable", usage=run_usage
+                    "error",
+                    exc.code or "provider_unavailable",
+                    usage=run_usage,
+                    error_detail=(redact.redact_text(exc.detail or str(exc)) or "")[:120] or None,
                 )
             except Exception:  # noqa: BLE001 - tracé et nommé
                 logger.exception(
@@ -775,6 +823,9 @@ async def run_expert(
                     analysis_id,
                 )
                 return await fail_run("error", "internal_error", usage=run_usage)
+            finally:
+                if owns_repair_provider:
+                    await repair_provider.close()
             if output is None:
                 error_code = "structured_output_error"
                 error_detail = error_detail or "schema_validation_error"
@@ -845,8 +896,15 @@ async def run_arbiter(
     get_connection: Callable[[], Awaitable[Any]],
     allowed_tools: frozenset[str] | None = None,
     document_nonce: str = "",
+    provider: Any | None = None,
+    provider_id: str = "minimax",
+    model: str | None = None,
+    api_key: str | None = None,
 ) -> tuple[ArbiterVerdict | None, ExecutionUsage, str | None]:
     """Arbitre : reçoit document + sorties validées, rend un verdict JSON validé."""
+    resolved_model = model or settings.minimax_model
+    pricing = provider_pricing(settings, provider_id, resolved_model)
+
     async def emit(event_type: str, payload: dict[str, Any]) -> None:
         async with (await get_connection()) as conn:
             await db.insert_analysis_event(
@@ -968,6 +1026,11 @@ async def run_arbiter(
             # lui exposer aucun outil évite des tours et répétitions inutiles.
             allowed_tools=frozenset(),
             round_event_sink=round_sink,
+            provider=provider,
+            provider_id=provider_id,
+            model=model,
+            api_key=api_key,
+            pricing=pricing,
         )
 
     async def fail_arbiter(
@@ -999,8 +1062,17 @@ async def run_arbiter(
         )
     except asyncio.TimeoutError:
         return await fail_arbiter("arbiter_timeout")
-    except ProviderError:
-        return await fail_arbiter("provider_unavailable")
+    except ProviderError as exc:
+        detail = (redact.redact_text(exc.detail or str(exc)) or "")[:120] or None
+        logger.warning(
+            "arbiter provider error [%s]: %s (analysis %s)",
+            exc.code,
+            detail,
+            analysis_id,
+        )
+        return await fail_arbiter(
+            exc.code or "provider_unavailable", error_detail=detail
+        )
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 - jamais avalé : tracé puis nommé
@@ -1028,67 +1100,83 @@ async def run_arbiter(
                 error_detail = error_detail or _validation_error_detail(exc)
         if hint is not None:
             repair_hint = hint
+            repair_provider = provider
+            owns_repair_provider = repair_provider is None
+            if owns_repair_provider:
+                repair_provider = build_provider(
+                    provider_id=provider_id,
+                    model_id=model or settings.minimax_model,
+                    api_key=api_key,
+                    settings=settings,
+                )
             try:
-                async with build_client(settings) as client:
-                    for attempt in range(1, settings.structured_repair_attempts + 1):
-                        await emit(
-                            "agent.repair.started",
-                            {
-                                "analysis_id": analysis_id,
-                                "role": "arbitre",
-                                "attempt": attempt,
-                                "max_attempts": settings.structured_repair_attempts,
-                                "reason": error_detail or "schema_validation_error",
-                            },
-                        )
-                        repaired, repair_usage = await _repair_structured_output(
-                            client,
-                            messages,
-                            settings,
-                            repair_hint,
-                            ArbiterVerdict.model_json_schema(),
-                            "ArbiterVerdict",
-                            max_output_tokens=settings.expert_max_output_tokens,
-                        )
-                        arbiter_usage = _merge_usage([arbiter_usage, repair_usage])
-                        repaired_data = (
-                            extract_structured_json(repaired) if repaired else None
-                        )
-                        if repaired_data is None:
-                            repair_hint = "la réparation n'est pas un objet JSON valide"
+                for attempt in range(1, settings.structured_repair_attempts + 1):
+                    await emit(
+                        "agent.repair.started",
+                        {
+                            "analysis_id": analysis_id,
+                            "role": "arbitre",
+                            "attempt": attempt,
+                            "max_attempts": settings.structured_repair_attempts,
+                            "reason": error_detail or "schema_validation_error",
+                        },
+                    )
+                    repaired, repair_usage = await _repair_structured_output(
+                        repair_provider,
+                        messages,
+                        settings,
+                        repair_hint,
+                        ArbiterVerdict.model_json_schema(),
+                        "ArbiterVerdict",
+                        max_output_tokens=settings.expert_max_output_tokens,
+                        pricing=pricing,
+                    )
+                    arbiter_usage = _merge_usage([arbiter_usage, repair_usage])
+                    repaired_data = (
+                        extract_structured_json(repaired) if repaired else None
+                    )
+                    if repaired_data is None:
+                        repair_hint = "la réparation n'est pas un objet JSON valide"
+                    else:
+                        try:
+                            verdict = validate_arbiter_verdict(repaired_data)
+                        except ValidationError as exc:
+                            verdict = None
+                            attempt_error_detail = _validation_error_detail(exc)
+                            repair_hint = (
+                                "erreurs de validation persistantes : "
+                                + str(exc.errors()[:3])
+                            )
                         else:
-                            try:
-                                verdict = validate_arbiter_verdict(repaired_data)
-                            except ValidationError as exc:
-                                verdict = None
-                                attempt_error_detail = _validation_error_detail(exc)
-                                repair_hint = (
-                                    "erreurs de validation persistantes : "
-                                    + str(exc.errors()[:3])
-                                )
-                            else:
-                                attempt_error_detail = None
-                        if repaired_data is None:
-                            attempt_error_detail = "invalid_json"
-                        await emit(
-                            "agent.repair.completed" if verdict is not None else "agent.repair.failed",
-                            {
-                                "analysis_id": analysis_id,
-                                "role": "arbitre",
-                                "attempt": attempt,
-                                "max_attempts": settings.structured_repair_attempts,
-                                "error_detail": None if verdict is not None else attempt_error_detail,
-                            },
-                        )
-                        if verdict is not None:
-                            break
-            except ProviderError:
-                return await fail_arbiter("provider_unavailable", arbiter_usage)
+                            attempt_error_detail = None
+                    if repaired_data is None:
+                        attempt_error_detail = "invalid_json"
+                    await emit(
+                        "agent.repair.completed" if verdict is not None else "agent.repair.failed",
+                        {
+                            "analysis_id": analysis_id,
+                            "role": "arbitre",
+                            "attempt": attempt,
+                            "max_attempts": settings.structured_repair_attempts,
+                            "error_detail": None if verdict is not None else attempt_error_detail,
+                        },
+                    )
+                    if verdict is not None:
+                        break
+            except ProviderError as exc:
+                return await fail_arbiter(
+                    exc.code or "provider_unavailable",
+                    arbiter_usage,
+                    error_detail=(redact.redact_text(exc.detail or str(exc)) or "")[:120] or None,
+                )
             except Exception:  # noqa: BLE001 - tracé et nommé
                 logger.exception(
                     "arbiter repair failed internally (analysis %s)", analysis_id
                 )
                 return await fail_arbiter("internal_error", arbiter_usage)
+            finally:
+                if owns_repair_provider:
+                    await repair_provider.close()
 
     if verdict is not None:
         await response_sink("agent.response.completed", {"role": "arbitre"})
@@ -1125,6 +1213,12 @@ async def run_analysis(
     document: str,
     settings: Settings,
     get_connection: Callable[[], Awaitable[Any]],
+    *,
+    provider_id: str = "minimax",
+    model: str | None = None,
+    api_key: str | None = None,
+    provider: Any | None = None,
+    auth_mode: str = "api_key",
 ) -> AnalysisResult:
     """Orchestration complète d'une analyse (statuts, événements, persistance).
 
@@ -1132,8 +1226,18 @@ async def run_analysis(
     responsabilité de l'appelant (route `/start`, avant de lancer cette tâche
     de fond) : cette fonction lit uniquement la configuration des outils déjà
     figée par `snapshot_analysis_tool_states` à la création de l'analyse.
+
+    `provider_id`/`model`/`api_key` figent la sélection provider de l'analyse
+    et le credential runtime BYOK (en mémoire uniquement, jamais persisté).
+    `provider`, quand fourni, évite de reconstruire l'adapter (la route a déjà
+    validé le credential).
     """
     session = AgentSession(document=document)
+    session.provider_id = provider_id
+    session.model_id = model or settings.minimax_model
+    session.pricing = provider_pricing(
+        settings, provider_id, model or settings.minimax_model
+    )
     # Nonce régénéré à chaque analyse : le document ne peut pas deviner la
     # borne fermante de sa propre zone de données pour reprendre la main.
     document_nonce = security.new_document_nonce()
@@ -1148,6 +1252,15 @@ async def run_analysis(
         row["tool_name"] for row in tool_rows if row["enabled"]
     )
 
+    if provider is None:
+        provider = build_provider(
+            provider_id=provider_id,
+            model_id=model or settings.minimax_model,
+            api_key=api_key,
+            settings=settings,
+            auth_mode=auth_mode,
+        )
+
     results: list[ExpertRunResult] = []
 
     async def run_one(role: ExpertRole) -> ExpertRunResult:
@@ -1160,10 +1273,14 @@ async def run_analysis(
             get_connection=get_connection,
             allowed_tools=allowed_tools,
             document_nonce=document_nonce,
+            provider=provider,
+            provider_id=provider_id,
+            model=model,
+            api_key=api_key,
         )
 
-    tasks = [run_one(role) for role in EXPERT_ROLES]
     try:
+        tasks = [run_one(role) for role in EXPERT_ROLES]
         outcomes = await asyncio.wait_for(
             asyncio.gather(*tasks, return_exceptions=True),
             timeout=settings.analysis_timeout_seconds,
@@ -1192,6 +1309,7 @@ async def run_analysis(
                     "error_code": "analysis_timeout",
                 },
             )
+        await provider.close()
         return AnalysisResult(
             analysis_id=analysis_id,
             status="failed",
@@ -1262,6 +1380,10 @@ async def run_analysis(
             get_connection=get_connection,
             allowed_tools=allowed_tools,
             document_nonce=document_nonce,
+            provider=provider,
+            provider_id=provider_id,
+            model=model,
+            api_key=api_key,
         )
         if verdict is not None and missing_roles:
             # Informations structurelles connues du seul orchestrateur : imposées.
@@ -1305,6 +1427,7 @@ async def run_analysis(
             },
         )
 
+    await provider.close()
     return AnalysisResult(
         analysis_id=analysis_id,
         status=status,

@@ -1,12 +1,16 @@
 flowchart TD
-    U["Utilisateur"] --> F["React 18 + TypeScript<br/>stepper · outils · diagnostics"]
-    F -->|"POST /api/analyses<br/>document texte 1..12000"| API["FastAPI<br/>validation · limites · CORS"]
-    API -->|"201 analysis_id<br/>configuration figée"| F
-    F -->|"POST /start idempotent"| API
-    F <-->|"snapshot + historique paginé<br/>SSE rejouable par event id"| API
+    U["Utilisateur"] --> F["React 18 + TypeScript<br/>stepper · outils · Fournisseur IA (BYOK)"]
+    F -->|"POST /api/session<br/>cookie de session signé"| API["FastAPI<br/>validation · limites · CORS strict · redaction"]
+    F -->|"POST /api/providers/test-connection<br/>clé BYOK testée sans inférence"| API
+    F -->|"POST /api/analyses<br/>provider · modèle · enabled_tools figés"| API
+    API -->|"201 analysis_id"| F
+    F -->|"POST /start + clé BYOK (mémoire)"| API
+    F <-->|"snapshot + historique paginé<br/>SSE rejouable (fetch + ReadableStream)"| API
 
-    subgraph BACK["Backend mono-instance"]
-        API --> DB[("SQLite WAL<br/>analyses · experts · outils · événements")]
+    subgraph BACK["Backend ASGI mono-instance (SQLite sur volume durable)"]
+        API --> DB[("SQLite WAL<br/>analyses · experts · outils par session · événements")]
+        API --> SESS["Session anonyme HMAC<br/>ownership 404 sinon"]
+        API --> REG["Registre provider contrôlé<br/>allowlist d'endpoints (anti-SSRF)"]
         API --> O["Orchestrateur asyncio<br/>3 experts en parallèle"]
         O --> A["Avocat"]
         O --> P["Procureur"]
@@ -16,12 +20,17 @@ flowchart TD
         C --> LOOP
         LOOP --> EXEC["Exécuteur local<br/>liste figée + cache des succès"]
         EXEC --> TOOLS["Outils sans argument<br/>métriques · sécurité · coût"]
-        LOOP <-->|"deltas réels + tool calls"| MM["MiniMax-M3"]
+        LOOP --> PA["Provider abstraction<br/>types normalisés"]
+        REG --> PA
+        PA --> MM["MiniMax (SDK openai, thinking off)"]
+        PA --> OAI["OpenAI (SDK openai)"]
+        PA --> ANT["Anthropic (Messages API)"]
+        PA --> GEM["Google Gemini (generateContent)"]
         A --> VAL["Validation Pydantic AgentOutput<br/>normalisation JSON bornée"]
         P --> VAL
         C --> VAL
         VAL --> R["Arbitre sans outil<br/>sur ≥ 2 experts valides"]
-        R <-->|"deltas réels"| MM
+        R --> PA
         R --> VERDICT["Validation ArbiterVerdict"]
         VERDICT --> DB
         LOOP -->|"tours · deltas · traces"| DB

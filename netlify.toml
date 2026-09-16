@@ -1,0 +1,45 @@
+# CONCLAVE — déploiement Netlify (frontend uniquement).
+#
+# Le backend FastAPI est déployé SÉPARÉMENT sur un hébergement ASGI/Docker
+# persistant (voir backend/Dockerfile) et joint via VITE_API_BASE_URL.
+# Aucune réécriture proxy `/api/*` vers un backend externe : le flux SSE long
+# n'est pas adapté aux limites des proxy rewrites Netlify. Le frontend parle
+# en HTTPS direct au backend public.
+#
+# Aucun secret LLM n'est nécessaire à ce build : toutes les clés sont BYOK
+# côté navigateur.
+
+[build]
+  command = "npm ci --prefix frontend && npm run build --prefix frontend"
+  publish = "frontend/dist"
+
+[build.environment]
+  # La CI ne doit jamais contenir de clé LLM : le build est strictement
+  # public. Si un backend est joint, définir l'URL ici SANS aucun secret.
+  # VITE_API_BASE_URL="https://api.conclave.example"
+
+# SPA fallback : toutes les routes inconnues servent index.html (le state
+# applicatif vit dans l'URL via ?uuid=…, jamais de vraies routes serveur).
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# En-têtes de sécurité.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+    X-Frame-Options = "DENY"
+    # CSP : origines réellement nécessaires uniquement — soi-même, le backend
+    # API (origine réelle du VITE_API_BASE_URL à l'heure du build), et rien
+    # d'autre. À adapter si le nom de domaine backend change.
+    Content-Security-Policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.conclave.example; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+
+# Assets hachés : cache immuable, long.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

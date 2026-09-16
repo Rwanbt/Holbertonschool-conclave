@@ -44,7 +44,8 @@ TOOL_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "name": "estimate_current_analysis_cost",
         "description": (
             "Estime le coût en dollars d'une analyse du document chargé sur le serveur, "
-            "en fonction des tarifs MiniMax configurés et du budget de sortie. "
+            "en fonction des tarifs du fournisseur et du modèle configurés "
+            "et du budget de sortie. "
             "Appelle-le APRÈS avoir observé les métriques du document. "
             "Cet outil ne prend aucun argument."
         ),
@@ -59,11 +60,17 @@ ALLOWED_TOOL_NAMES: frozenset[str] = frozenset(
 
 @dataclass
 class AgentSession:
-    """État partagé d'une analyse : le document reste côté serveur."""
+    """État partagé d'une analyse : le document reste côté serveur.
+
+    `pricing` (dict fournisseur/modèle) est figé à la création de l'analyse :
+    l'estimation de coût dépend du provider/modèle, jamais d'un réglage global."""
 
     document: str
     metrics: dict[str, int] | None = None
     findings: list[dict[str, Any]] | None = None
+    provider_id: str = "minimax"
+    model_id: str | None = None
+    pricing: dict[str, Any] | None = None
 
 
 def adapter_measure_current_document(
@@ -105,11 +112,20 @@ def adapter_estimate_current_analysis_cost(
             "estimate_current_analysis_cost requires measure_current_document "
             "to have been observed first; it never measures implicitly.",
         )
-    pricing = {
-        "model_name": settings.minimax_model,
-        "input_usd_per_million_tokens": settings.minimax_input_usd_per_million,
-        "output_usd_per_million_tokens": settings.minimax_output_usd_per_million,
-    }
+    # Tarifs FIGÉS du provider/modèle de l'analyse (jamais un réglage global) ;
+    # repli sur la configuration MiniMax pour les appels/tests directs sans
+    # sélection provider. Aucun tarif -> coût null, jamais une valeur inventée.
+    if session.pricing is not None:
+        pricing = dict(session.pricing)
+        pricing["model_name"] = session.model_id or session.pricing.get(
+            "model_name", "unknown"
+        )
+    else:
+        pricing = {
+            "model_name": settings.minimax_model,
+            "input_usd_per_million_tokens": settings.minimax_input_usd_per_million,
+            "output_usd_per_million_tokens": settings.minimax_output_usd_per_million,
+        }
     # Estimation conservatrice de l'analyse ENTIÈRE : trois experts puis un
     # arbitre, chacun pouvant consommer `agent_max_rounds`, plus les
     # réparations structurées sans outils. L'ancien calcul utilisait le
@@ -270,22 +286,19 @@ async def execute_tool(
     return "success", result, None, output_summary(name, result)
 
 
-def pricing_from_settings(settings: Settings) -> dict[str, Any]:
-    return {
-        "model_name": settings.minimax_model,
-        "input_usd_per_million_tokens": settings.minimax_input_usd_per_million,
-        "output_usd_per_million_tokens": settings.minimax_output_usd_per_million,
-    }
-
-
 def estimated_cost_usd(
-    settings: Settings, input_tokens: int, output_tokens: int
+    pricing: dict[str, Any] | None, input_tokens: int, output_tokens: int
 ) -> float | None:
+    """Coût estimé depuis les tarifs fournisseur/modèle figés, ou None.
+
+    Aucun tarif configuré -> None (le coût ne bloque jamais une analyse)."""
+    if pricing is None:
+        return None
     from . import tools
 
     try:
         estimate = tools.estimate_analysis_cost(
-            input_tokens, output_tokens, pricing_from_settings(settings)
+            input_tokens, output_tokens, pricing
         )
     except (tools.UnknownPricingError, ValueError):
         return None
