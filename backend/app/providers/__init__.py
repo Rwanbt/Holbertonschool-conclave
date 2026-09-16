@@ -59,14 +59,17 @@ def build_provider(
     model_id: str,
     api_key: str | None,
     settings: Any,
+    auth_mode: str = "api_key",
 ) -> ProviderAdapter:
     """Fabrique l'adapter pour une sélection + un credential runtime.
 
-    - `api_key` (BYOK utilisateur) a toujours priorité ;
+    - `api_key` (BYOK) a toujours priorité ;
     - à défaut, le credential serveur (dev/smoke uniquement) n'est utilisé que
       si `ALLOW_SERVER_PROVIDER_CREDENTIALS=true` : JAMAIS de fallback
       silencieux vers la clé du propriétaire ;
     - ni clé ni permission -> `ProviderError(provider_auth_failed)`.
+    - `auth_mode="oauth"` (Google Gemini officiel seulement) : `api_key`
+      contient l'access token OAuth.
     """
     if not api_key:
         if not getattr(settings, "allow_server_provider_credentials", False):
@@ -81,7 +84,7 @@ def build_provider(
             "provider_auth_failed",
             "Aucune clé API fournie et aucune clé serveur configurée.",
         )
-    return create_adapter(provider_id, model_id, api_key)
+    return create_adapter(provider_id, model_id, api_key, auth_mode=auth_mode)
 
 
 def _server_credential(settings: Any, provider_id: str) -> str | None:

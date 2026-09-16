@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { fetchProviderCatalog, testProviderConnection } from './api/client'
+import {
+  disconnectOAuth as apiDisconnectOAuth,
+  fetchOAuthStatus,
+  fetchProviderCatalog,
+  startOAuth,
+  testProviderConnection,
+} from './api/client'
 import { toErrorMessage } from './errors'
 import type {
   ProviderConnectionStatus,
@@ -22,10 +28,15 @@ export interface ProviderConnection {
   connectionMessage: string | null
   needsInference: boolean
   isReady: boolean
+  oauthSupported: boolean
+  oauthConfigured: boolean
+  oauthConnected: boolean
   selectProvider: (providerId: string) => void
   selectModel: (modelId: string) => void
   setApiKey: (value: string) => void
   test: () => Promise<void>
+  connectOAuth: () => void
+  disconnectOAuth: () => Promise<void>
   disconnect: () => void
   refresh: () => Promise<void>
 }
@@ -48,6 +59,52 @@ export function useProviderConnection(): ProviderConnection {
   const [connection, setConnection] = useState<ProviderConnectionStatus>('disconnected')
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null)
   const [needsInference, setNeedsInference] = useState(false)
+  const [oauthConnected, setOauthConnected] = useState(false)
+
+  const refreshOAuthStatus = useCallback(
+    async (providerId: string): Promise<void> => {
+      try {
+        const status = await fetchOAuthStatus(providerId)
+        setOauthConnected(status.connected)
+      } catch {
+        setOauthConnected(false)
+      }
+    },
+    [],
+  )
+
+  useEffect(() => {
+    if (selectedProviderId === null) {
+      setOauthConnected(false)
+      return
+    }
+    void refreshOAuthStatus(selectedProviderId)
+  }, [selectedProviderId, refreshOAuthStatus])
+
+  // Retour du flux OAuth : ?oauth=success|error — on nettoie l'URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const result = params.get('oauth')
+    if (result === null) {
+      return
+    }
+    if (result === 'success') {
+      setConnection('connected')
+      setConnectionMessage('Connexion OAuth réussie.')
+    } else {
+      setConnection('error')
+      setConnectionMessage('La connexion OAuth a échoué. Réessayez.')
+    }
+    params.delete('oauth')
+    params.delete('provider')
+    params.delete('reason')
+    const query = params.toString()
+    history.replaceState(
+      null,
+      '',
+      window.location.pathname + (query ? `?${query}` : ''),
+    )
+  }, [])
 
   const refresh = useCallback(async (): Promise<void> => {
     setCatalogStatus('loading')
@@ -168,16 +225,35 @@ export function useProviderConnection(): ProviderConnection {
     resetConnection()
   }, [resetConnection])
 
+  const connectOAuth = useCallback((): void => {
+    if (selectedProviderId !== null) {
+      startOAuth(selectedProviderId)
+    }
+  }, [selectedProviderId])
+
+  const disconnectOAuth = useCallback(async (): Promise<void> => {
+    if (selectedProviderId === null) {
+      return
+    }
+    await apiDisconnectOAuth(selectedProviderId)
+    setOauthConnected(false)
+    resetConnection()
+  }, [selectedProviderId, resetConnection])
+
   const modelCompatible =
     selectedModel !== null &&
     selectedModel.supports_tools &&
     selectedModel.supports_streaming &&
     selectedModel.supports_structured_output
 
+  const oauthSupported = selectedProvider?.oauth_supported ?? false
+  const oauthConfigured = selectedProvider?.oauth_configured ?? false
+  const hasCredential = apiKey.trim().length > 0 || oauthConnected
+
   const isReady =
     selectedProviderId !== null &&
     selectedModelId !== null &&
-    apiKey.trim().length > 0 &&
+    hasCredential &&
     modelCompatible &&
     connection !== 'testing' &&
     connection !== 'error'
@@ -195,10 +271,15 @@ export function useProviderConnection(): ProviderConnection {
     connectionMessage,
     needsInference,
     isReady,
+    oauthSupported,
+    oauthConfigured,
+    oauthConnected,
     selectProvider,
     selectModel,
     setApiKey,
     test,
+    connectOAuth,
+    disconnectOAuth,
     disconnect,
     refresh,
   }

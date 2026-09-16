@@ -72,6 +72,61 @@ export async function establishSession(): Promise<void> {
   }
 }
 
+export interface OAuthStatus {
+  provider_id: string
+  supported: boolean
+  configured: boolean
+  connected: boolean
+}
+
+/** Redirige le navigateur vers le flux OAuth officiel (Google Gemini). */
+export function startOAuth(providerId: string): void {
+  const token = readStoredSessionToken()
+  const query = token !== null && token.length > 0
+    ? `?session=${encodeURIComponent(token)}`
+    : ''
+  window.location.href = `${BASE_URL}/api/oauth/${providerId}/start${query}`
+}
+
+export async function fetchOAuthStatus(
+  providerId: string,
+): Promise<OAuthStatus> {
+  let response: Response
+  try {
+    response = await fetch(`${BASE_URL}/api/oauth/${providerId}/status`, {
+      credentials: CREDENTIALS,
+      headers: sessionHeaders(),
+    })
+  } catch {
+    throw {
+      kind: 'network',
+      message: `Impossible de joindre le backend (${API_BASE_URL}).`,
+    } satisfies ApiError
+  }
+  if (!response.ok) {
+    throw await httpError(response)
+  }
+  const body = (await response.json()) as Partial<OAuthStatus>
+  return {
+    provider_id: providerId,
+    supported: body.supported === true,
+    configured: body.configured === true,
+    connected: body.connected === true,
+  }
+}
+
+export async function disconnectOAuth(providerId: string): Promise<void> {
+  try {
+    await fetch(`${BASE_URL}/api/oauth/${providerId}/disconnect`, {
+      method: 'POST',
+      credentials: CREDENTIALS,
+      headers: sessionHeaders(),
+    })
+  } catch {
+    // Déconnexion best-effort ; l'interface rafraîchit l'état ensuite.
+  }
+}
+
 export async function runAgent(
   instruction: string,
   document: string,

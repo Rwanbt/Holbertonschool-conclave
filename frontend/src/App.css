@@ -1323,3 +1323,14 @@
   color: var(--text-secondary);
   font-size: 0.85rem;
 }
+
+.provider-actions .provider-oauth {
+  background-color: var(--accent, var(--surface));
+  color: var(--accent-fg, inherit);
+  border-color: var(--accent, var(--border-strong));
+}
+
+.provider-actions .provider-oauth-connected {
+  background-color: var(--success-bg);
+  color: var(--success-fg);
+}

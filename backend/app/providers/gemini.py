@@ -212,11 +212,13 @@ class GeminiAdapter(ProviderAdapter):
         model: str,
         base_url: str = GEMINI_BASE_URL,
         timeout: float = 30.0,
+        auth_mode: str = "api_key",
     ):
         self.provider_id = "gemini"
         self.label = "Google Gemini"
         self.model = model
         self._api_key = api_key
+        self._auth_mode = auth_mode
         self._base_url = base_url.rstrip("/")
         self._timeout = timeout
         self._client = httpx.AsyncClient(timeout=timeout)
@@ -244,10 +246,13 @@ class GeminiAdapter(ProviderAdapter):
         return "Google Gemini : connexion validée (clé acceptée)."
 
     def _headers(self) -> dict[str, str]:
-        return {
-            "x-goog-api-key": self._api_key,
-            "content-type": "application/json",
-        }
+        headers = {"content-type": "application/json"}
+        if self._auth_mode == "oauth":
+            # Jeton OAuth 2.0 officiel (Bearer) au lieu de la clé API.
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        else:
+            headers["x-goog-api-key"] = self._api_key
+        return headers
 
     def _endpoint(self, stream: bool) -> str:
         suffix = ":streamGenerateContent?alt=sse" if stream else ":generateContent"

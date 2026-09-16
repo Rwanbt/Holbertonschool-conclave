@@ -173,11 +173,15 @@ def model_entry(provider_id: str, model_id: str) -> ModelEntry | None:
     return None
 
 
-def create_adapter(provider_id: str, model_id: str, api_key: str) -> ProviderAdapter:
+def create_adapter(
+    provider_id: str, model_id: str, api_key: str, auth_mode: str = "api_key"
+) -> ProviderAdapter:
     """Fabrique un adapter configuré, OU lève une `ProviderError` propre.
 
     La base URL provient exclusivement du catalogue : un `provider_id` inconnu
-    ou un modèle inconnu est refusé avant tout réseau.
+    ou un modèle inconnu est refusé avant tout réseau. `auth_mode="oauth"`
+    n'est honoré que par les providers qui le supportent officiellement
+    (Google Gemini).
     """
     entry = REGISTRY.get(provider_id)
     if entry is None:
@@ -190,6 +194,13 @@ def create_adapter(provider_id: str, model_id: str, api_key: str) -> ProviderAda
             "model_not_available",
             f"Modèle {model_id} non autorisé pour le fournisseur {provider_id}.",
         )
+    if auth_mode == "oauth":
+        if entry.adapter != "gemini":
+            raise ProviderError(
+                "provider_auth_failed",
+                f"Le fournisseur {provider_id} ne prend pas en charge OAuth.",
+            )
+        return GeminiAdapter(api_key=api_key, model=model_id, auth_mode="oauth")
     return entry.factory(api_key, model_id)
 
 

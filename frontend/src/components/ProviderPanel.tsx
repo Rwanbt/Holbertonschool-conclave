@@ -9,6 +9,9 @@ function statusLabel(connection: ProviderConnection): string {
   if (connection.connection === 'testing') {
     return 'Test en cours…'
   }
+  if (connection.oauthConnected) {
+    return `${connection.selectedProvider?.label ?? ''} · connecté (OAuth)`
+  }
   if (connection.connection === 'connected') {
     return `${connection.selectedProvider?.label ?? ''} · connecté`
   }
@@ -119,6 +122,25 @@ export function ProviderPanel({ connection }: ProviderPanelProps) {
       </div>
 
       <div className="provider-actions">
+        {connection.oauthSupported && connection.oauthConfigured && (
+          connection.oauthConnected ? (
+            <button
+              type="button"
+              className="provider-oauth-connected"
+              onClick={() => void connection.disconnectOAuth()}
+            >
+              {`Déconnecter ${provider?.label ?? 'OAuth'}`}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="provider-oauth"
+              onClick={connection.connectOAuth}
+            >
+              {`Se connecter avec ${provider?.label ?? 'OAuth'}`}
+            </button>
+          )
+        )}
         <button
           type="button"
           onClick={() => void connection.test()}
@@ -138,6 +160,14 @@ export function ProviderPanel({ connection }: ProviderPanelProps) {
           Déconnecter
         </button>
       </div>
+
+      {connection.oauthSupported && connection.oauthConfigured && (
+        <p className="provider-message">
+          {connection.oauthConnected
+            ? 'Connexion OAuth officielle active : aucune clé API n’est nécessaire pour ce fournisseur.'
+            : 'Ce fournisseur propose une connexion OAuth officielle (recommandée). Sinon, utilisez une clé API.'}
+        </p>
+      )}
 
       {connection.connectionMessage !== null && (
         <p

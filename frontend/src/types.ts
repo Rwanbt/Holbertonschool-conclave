@@ -277,6 +277,8 @@ export interface ProviderInfo {
   supports_streaming: boolean
   supports_structured_output: boolean
   supports_reasoning: boolean
+  oauth_supported: boolean
+  oauth_configured: boolean
   models: ProviderModelInfo[]
 }
 

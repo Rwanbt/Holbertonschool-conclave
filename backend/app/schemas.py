@@ -187,6 +187,14 @@ class StartAnalysisRequest(BaseModel):
         max_length=512,
         description="Clé API personnelle, transmise une seule fois au runtime.",
     )
+    auth_mode: str = Field(
+        "api_key",
+        max_length=32,
+        description=(
+            "Mode d'authentification : 'api_key' (défaut) ou 'oauth' "
+            "(Google Gemini, si connecté côté serveur)."
+        ),
+    )
 
 
 class TestConnectionRequest(BaseModel):
@@ -367,6 +375,12 @@ class ProviderInfo(BaseModel):
         ..., description="Capacité globale de sortie structurée."
     )
     supports_reasoning: bool = Field(..., description="Raisonnement exposé ou non.")
+    oauth_supported: bool = Field(
+        False, description="OAuth officiellement supporté pour l'inférence."
+    )
+    oauth_configured: bool = Field(
+        False, description="Client OAuth configuré côté serveur."
+    )
     models: list[ProviderModelInfo] = Field(..., description="Modèles autorisés.")
 
 

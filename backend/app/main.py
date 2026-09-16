@@ -33,9 +33,9 @@ from typing import Any, AsyncIterator
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 
-from . import agent, db, experts, llm, redact, security, sessions, toolkit
+from . import agent, db, experts, llm, oauth, redact, security, sessions, toolkit
 from .config import Settings, get_settings
 from .providers import (
     ProviderError,
@@ -277,7 +277,9 @@ async def create_session(
 
 
 @app.get("/api/providers", response_model=ProviderCatalogResponse)
-async def list_providers() -> ProviderCatalogResponse:
+async def list_providers(
+    settings: Settings = Depends(get_settings),
+) -> ProviderCatalogResponse:
     specs = list_provider_specs()
     providers = [
         ProviderInfo(
@@ -288,6 +290,8 @@ async def list_providers() -> ProviderCatalogResponse:
             supports_streaming=spec["supports_streaming"],
             supports_structured_output=spec["supports_structured_output"],
             supports_reasoning=spec["supports_reasoning"],
+            oauth_supported=oauth.oauth_supported(spec["provider_id"]),
+            oauth_configured=oauth.oauth_available(spec["provider_id"], settings),
             models=[
                 ProviderModelInfo(**model)
                 for model in spec["models"]
@@ -296,6 +300,95 @@ async def list_providers() -> ProviderCatalogResponse:
         for spec in specs
     ]
     return ProviderCatalogResponse(providers=providers)
+
+
+@app.get("/api/oauth/{provider_id}/status")
+async def oauth_status(
+    provider_id: str,
+    request_http: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    session_token = _session_token_from_request(request_http, settings)
+    connected = bool(
+        session_token and oauth.get_token(session_token, provider_id)
+    )
+    return {
+        "provider_id": provider_id,
+        "supported": oauth.oauth_supported(provider_id),
+        "configured": oauth.oauth_available(provider_id, settings),
+        "connected": connected,
+    }
+
+
+@app.get("/api/oauth/{provider_id}/start")
+async def oauth_start(
+    provider_id: str,
+    request_http: Request,
+    session: str | None = None,
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    """Démarre le flux OAuth officiel (Google Gemini). Redirige vers Google.
+
+    `session` (query) porte le jeton de session du frontend : le jeton OAuth
+    obtenu lui sera rattaché, afin que l'analyse (transportée par le même
+    jeton) retrouve le credential. À défaut, on retombe sur le cookie/en-tête.
+    """
+    if not oauth.oauth_available(provider_id, settings):
+        raise HTTPException(
+            status_code=400,
+            detail="OAuth non disponible pour ce fournisseur (non supporté ou non configuré).",
+        )
+    session_token = (
+        session.strip()
+        if session and session.strip()
+        else _session_token_from_request(request_http, settings)
+    )
+    if session_token is None:
+        session_token = sessions.new_session_token()
+    state = sessions.sign_session(oauth.new_state(session_token), settings)
+    return RedirectResponse(oauth.build_authorize_url(state, settings))
+
+
+@app.get("/api/oauth/{provider_id}/callback")
+async def oauth_callback(
+    provider_id: str,
+    code: str,
+    state: str,
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    """Callback OAuth : échange le code, stocke le jeton EN MÉMOIRE serveur."""
+    target = settings.oauth_frontend_redirect
+    if not oauth.oauth_available(provider_id, settings):
+        return RedirectResponse(f"{target}/?oauth=error&reason=unavailable")
+    payload = sessions.unsign_session(state, settings)
+    if not payload or ":" not in payload:
+        return RedirectResponse(f"{target}/?oauth=error&reason=invalid_state")
+    session_token = payload.split(":", 1)[0]
+    try:
+        token = await oauth.exchange_google_code(code, settings)
+    except oauth.OAuthError:
+        return RedirectResponse(f"{target}/?oauth=error&reason=exchange_failed")
+    access_token = token["access_token"]
+    redact.register_secret(access_token)
+    oauth.store_token(
+        session_token,
+        provider_id,
+        access_token,
+        float(token.get("expires_in") or 3600),
+    )
+    return RedirectResponse(f"{target}/?oauth=success&provider={provider_id}")
+
+
+@app.post("/api/oauth/{provider_id}/disconnect")
+async def oauth_disconnect(
+    provider_id: str,
+    request_http: Request,
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    session_token = _session_token_from_request(request_http, settings)
+    if session_token is not None:
+        oauth.delete_token(session_token, provider_id)
+    return {"provider_id": provider_id, "connected": False}
 
 
 @app.post(
@@ -526,6 +619,13 @@ async def start_analysis(
         model_id = row["model_id"] or settings.minimax_model
 
     api_key = request.api_key if request is not None else None
+    auth_mode = (request.auth_mode if request is not None else "api_key") or "api_key"
+    if not api_key and session_token is not None:
+        # Repli OAuth officiel (Google Gemini) : jeton stocké en mémoire serveur.
+        oauth_token = oauth.get_token(session_token, provider_id)
+        if oauth_token:
+            api_key = oauth_token
+            auth_mode = "oauth"
     if api_key:
         redact.register_secret(api_key)
 
@@ -535,6 +635,7 @@ async def start_analysis(
             model_id=model_id,
             api_key=api_key,
             settings=settings,
+            auth_mode=auth_mode,
         )
     except ProviderError as exc:
         return JSONResponse(
@@ -564,6 +665,7 @@ async def start_analysis(
             model=model_id,
             api_key=api_key,
             provider=provider,
+            auth_mode=auth_mode,
         )
     )
     app.state.analysis_tasks[analysis_id] = task

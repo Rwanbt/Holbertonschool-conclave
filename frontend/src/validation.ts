@@ -737,6 +737,14 @@ function parseProviderInfo(value: unknown): ProviderInfo {
     record.supports_reasoning === undefined
       ? false
       : readBoolean(record, 'supports_reasoning')
+  const oauth_supported =
+    record.oauth_supported === undefined
+      ? false
+      : readBoolean(record, 'oauth_supported')
+  const oauth_configured =
+    record.oauth_configured === undefined
+      ? false
+      : readBoolean(record, 'oauth_configured')
   const modelsValue = record.models
   if (!Array.isArray(modelsValue)) {
     throw new ResponseValidationError(
@@ -752,6 +760,8 @@ function parseProviderInfo(value: unknown): ProviderInfo {
     supports_streaming,
     supports_structured_output,
     supports_reasoning,
+    oauth_supported,
+    oauth_configured,
     models,
   }
 }

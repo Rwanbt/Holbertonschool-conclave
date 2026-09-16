@@ -1218,6 +1218,7 @@ async def run_analysis(
     model: str | None = None,
     api_key: str | None = None,
     provider: Any | None = None,
+    auth_mode: str = "api_key",
 ) -> AnalysisResult:
     """Orchestration complète d'une analyse (statuts, événements, persistance).
 
@@ -1257,6 +1258,7 @@ async def run_analysis(
             model_id=model or settings.minimax_model,
             api_key=api_key,
             settings=settings,
+            auth_mode=auth_mode,
         )
 
     results: list[ExpertRunResult] = []

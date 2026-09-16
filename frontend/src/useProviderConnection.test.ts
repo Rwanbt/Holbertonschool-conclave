@@ -12,6 +12,8 @@ const CATALOG = {
       supports_streaming: true,
       supports_structured_output: true,
       supports_reasoning: false,
+      oauth_supported: false,
+      oauth_configured: false,
       models: [
         {
           model_id: 'MiniMax-M3',
@@ -30,6 +32,8 @@ const CATALOG = {
       supports_streaming: true,
       supports_structured_output: true,
       supports_reasoning: true,
+      oauth_supported: false,
+      oauth_configured: false,
       models: [
         {
           model_id: 'gpt-4o-mini',
