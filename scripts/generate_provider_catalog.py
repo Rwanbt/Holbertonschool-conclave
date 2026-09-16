@@ -91,6 +91,12 @@ CURATED: dict[str, tuple[str, str, str]] = {
     ),
     "moonshotai": ("openai_compatible", "https://api.moonshot.ai/v1", "Moonshot (Kimi)"),
     "xiaomi": ("openai_compatible", "https://api.xiaomimimo.com/v1", "Xiaomi MiMo"),
+    "opencode": ("openai_compatible", "https://opencode.ai/zen/v1", "OpenCode Zen"),
+    "opencode-go": (
+        "openai_compatible",
+        "https://opencode.ai/zen/go/v1",
+        "OpenCode Go",
+    ),
 }
 
 #: provider_id CONCLAVE -> id models.dev (quand différents)
