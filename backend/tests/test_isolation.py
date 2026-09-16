@@ -114,7 +114,7 @@ class TestCrossUserIsolation:
         with TestClient(app) as a, TestClient(app) as b:
             a_created = a.post(
                 "/api/analyses",
-                json={"document": DOC, "provider_id": "openai", "model_id": "gpt-4o-mini"},
+                json={"document": DOC, "provider_id": "openai", "model_id": "gpt-5.4-mini"},
             ).json()
             b_created = b.post(
                 "/api/analyses",
@@ -125,7 +125,7 @@ class TestCrossUserIsolation:
             a_snap = a.get(f"/api/analyses/{a_created['analysis_id']}").json()
             b_snap = b.get(f"/api/analyses/{b_created['analysis_id']}").json()
             assert a_snap["provider_id"] == "openai"
-            assert a_snap["model_id"] == "gpt-4o-mini"
+            assert a_snap["model_id"] == "gpt-5.4-mini"
             assert b_snap["provider_id"] == "minimax"
             assert b_snap["model_id"] == "MiniMax-M3"
 

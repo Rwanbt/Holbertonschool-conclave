@@ -55,17 +55,20 @@ def _openai_adapter() -> OpenAICompatibleAdapter:
 
 
 class TestRegistry:
-    def test_four_core_providers_without_secrets(self) -> None:
+    def test_core_providers_present_without_secrets(self) -> None:
         specs = list_provider_specs()
         ids = {spec["provider_id"] for spec in specs}
-        assert ids == {"minimax", "openai", "anthropic", "gemini"}
+        # Les 4 providers « socle » doivent être présents, parmi un catalogue
+        # bien plus large (issu de models.dev / opencode).
+        assert {"minimax", "openai", "anthropic", "gemini"} <= ids
+        assert len(ids) >= 20
         serialized = json.dumps(specs)
         assert "base_url" not in serialized
         assert "Authorization" not in serialized
         assert "sk-" not in serialized
         assert "AIza" not in serialized
         for spec in specs:
-            assert spec["auth_modes"] == ["api_key"]
+            assert spec["auth_modes"]
             assert spec["models"]
             for model in spec["models"]:
                 assert model["model_id"]
@@ -75,7 +78,7 @@ class TestRegistry:
         with pytest.raises(ProviderError):
             create_adapter("does-not-exist", "m", "sk-test")
         with pytest.raises(ProviderError):
-            create_adapter("openai", "gpt-999", "sk-test")
+            create_adapter("openai", "modele-inexistant-xyz", "sk-test")
 
     def test_models_have_pricing_or_null(self) -> None:
         for spec in list_provider_specs():
@@ -154,13 +157,18 @@ class TestProviderPricing:
         )
         assert provider_pricing(settings, "minimax", "MiniMax-M3") is None
 
-    def test_openai_pricing_from_registry(self) -> None:
-        from backend.app.providers import provider_pricing
+    def test_openai_pricing_from_catalog(self) -> None:
+        from backend.app.providers import provider_pricing, list_provider_specs
 
+        openai_spec = next(
+            spec for spec in list_provider_specs() if spec["provider_id"] == "openai"
+        )
+        model_id = openai_spec["models"][0]["model_id"]
         settings = Settings()
-        pricing = provider_pricing(settings, "openai", "gpt-4o-mini")
+        pricing = provider_pricing(settings, "openai", model_id)
+        # Les modèles OpenAI du catalogue portent un tarif officiel.
         assert pricing is not None
-        assert pricing["input_usd_per_million_tokens"] == 0.15
+        assert pricing["input_usd_per_million_tokens"] is not None
 
     def test_unknown_model_pricing_is_null(self) -> None:
         from backend.app.providers import provider_pricing

@@ -1,0 +1,5231 @@
+{
+  "source": "https://models.dev/api.json",
+  "providers": [
+    {
+      "provider_id": "openai",
+      "label": "OpenAI",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.openai.com/v1",
+      "env": "OPENAI_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "gpt-6-astra",
+          "label": "GPT-6 Astra",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 10.0,
+            "output_usd_per_million_tokens": 50.0
+          }
+        },
+        {
+          "model_id": "gpt-5.6-terra",
+          "label": "GPT-5.6 Terra",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 12.0
+          }
+        },
+        {
+          "model_id": "gpt-5.6-sol",
+          "label": "GPT-5.6 Sol",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 4.0,
+            "output_usd_per_million_tokens": 20.0
+          }
+        },
+        {
+          "model_id": "gpt-5.6-luna",
+          "label": "GPT-5.6 Luna",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "gpt-5.6",
+          "label": "GPT-5.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 4.0,
+            "output_usd_per_million_tokens": 20.0
+          }
+        },
+        {
+          "model_id": "gpt-realtime-2.1",
+          "label": "GPT-Realtime-2.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": false,
+          "supports_reasoning": true,
+          "context": 128000,
+          "max_output": 32000,
+          "pricing": {
+            "input_usd_per_million_tokens": 4.0,
+            "output_usd_per_million_tokens": 24.0
+          }
+        },
+        {
+          "model_id": "gpt-5.5-pro",
+          "label": "GPT-5.5 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 30.0,
+            "output_usd_per_million_tokens": 180.0
+          }
+        },
+        {
+          "model_id": "gpt-5.5",
+          "label": "GPT-5.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 5.0,
+            "output_usd_per_million_tokens": 30.0
+          }
+        },
+        {
+          "model_id": "gpt-5.4-nano",
+          "label": "GPT-5.4 nano",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 400000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 1.25
+          }
+        },
+        {
+          "model_id": "gpt-5.4-mini",
+          "label": "GPT-5.4 mini",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 400000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.75,
+            "output_usd_per_million_tokens": 4.5
+          }
+        },
+        {
+          "model_id": "gpt-5.4-pro",
+          "label": "GPT-5.4 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": false,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 30.0,
+            "output_usd_per_million_tokens": 180.0
+          }
+        },
+        {
+          "model_id": "gpt-5.4",
+          "label": "GPT-5.4",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.5,
+            "output_usd_per_million_tokens": 15.0
+          }
+        },
+        {
+          "model_id": "gpt-5.3-chat-latest",
+          "label": "GPT-5.3 Chat (latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 128000,
+          "max_output": 16384,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.75,
+            "output_usd_per_million_tokens": 14.0
+          }
+        },
+        {
+          "model_id": "gpt-5.3-codex-spark",
+          "label": "GPT-5.3 Codex Spark",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 128000,
+          "max_output": 32000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.75,
+            "output_usd_per_million_tokens": 14.0
+          }
+        },
+        {
+          "model_id": "gpt-5.3-codex",
+          "label": "GPT-5.3 Codex",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 400000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.75,
+            "output_usd_per_million_tokens": 14.0
+          }
+        },
+        {
+          "model_id": "gpt-5.2-pro",
+          "label": "GPT-5.2 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": false,
+          "supports_reasoning": true,
+          "context": 400000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 21.0,
+            "output_usd_per_million_tokens": 168.0
+          }
+        },
+        {
+          "model_id": "gpt-5.2-chat-latest",
+          "label": "GPT-5.2 Chat",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 128000,
+          "max_output": 16384,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.75,
+            "output_usd_per_million_tokens": 14.0
+          }
+        },
+        {
+          "model_id": "gpt-5.2",
+          "label": "GPT-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 400000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.75,
+            "output_usd_per_million_tokens": 14.0
+          }
+        },
+        {
+          "model_id": "gpt-5.1",
+          "label": "GPT-5.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 400000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.25,
+            "output_usd_per_million_tokens": 10.0
+          }
+        },
+        {
+          "model_id": "gpt-5-pro",
+          "label": "GPT-5 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 400000,
+          "max_output": 272000,
+          "pricing": {
+            "input_usd_per_million_tokens": 15.0,
+            "output_usd_per_million_tokens": 120.0
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "anthropic",
+      "label": "Anthropic",
+      "adapter": "anthropic",
+      "base_url": "https://api.anthropic.com/v1",
+      "env": "ANTHROPIC_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "claude-fable-5-1",
+          "label": "Claude Fable 5.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 10.0,
+            "output_usd_per_million_tokens": 50.0
+          }
+        },
+        {
+          "model_id": "claude-opus-5",
+          "label": "Claude Opus 5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 5.0,
+            "output_usd_per_million_tokens": 25.0
+          }
+        },
+        {
+          "model_id": "claude-sonnet-5",
+          "label": "Claude Sonnet 5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 10.0
+          }
+        },
+        {
+          "model_id": "claude-fable-5",
+          "label": "Claude Fable 5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 10.0,
+            "output_usd_per_million_tokens": 50.0
+          }
+        },
+        {
+          "model_id": "claude-opus-4-8",
+          "label": "Claude Opus 4.8",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 5.0,
+            "output_usd_per_million_tokens": 25.0
+          }
+        },
+        {
+          "model_id": "claude-opus-4-7",
+          "label": "Claude Opus 4.7",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 5.0,
+            "output_usd_per_million_tokens": 25.0
+          }
+        },
+        {
+          "model_id": "claude-sonnet-4-6",
+          "label": "Claude Sonnet 4.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 3.0,
+            "output_usd_per_million_tokens": 15.0
+          }
+        },
+        {
+          "model_id": "claude-opus-4-6",
+          "label": "Claude Opus 4.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 5.0,
+            "output_usd_per_million_tokens": 25.0
+          }
+        },
+        {
+          "model_id": "claude-opus-4-5",
+          "label": "Claude Opus 4.5 (latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 64000,
+          "pricing": {
+            "input_usd_per_million_tokens": 5.0,
+            "output_usd_per_million_tokens": 25.0
+          }
+        },
+        {
+          "model_id": "claude-opus-4-5-20251101",
+          "label": "Claude Opus 4.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 64000,
+          "pricing": {
+            "input_usd_per_million_tokens": 5.0,
+            "output_usd_per_million_tokens": 25.0
+          }
+        },
+        {
+          "model_id": "claude-haiku-4-5-20251001",
+          "label": "Claude Haiku 4.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 64000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 5.0
+          }
+        },
+        {
+          "model_id": "claude-haiku-4-5",
+          "label": "Claude Haiku 4.5 (latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 64000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 5.0
+          }
+        },
+        {
+          "model_id": "claude-sonnet-4-5-20250929",
+          "label": "Claude Sonnet 4.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 64000,
+          "pricing": {
+            "input_usd_per_million_tokens": 3.0,
+            "output_usd_per_million_tokens": 15.0
+          }
+        },
+        {
+          "model_id": "claude-sonnet-4-5",
+          "label": "Claude Sonnet 4.5 (latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 64000,
+          "pricing": {
+            "input_usd_per_million_tokens": 3.0,
+            "output_usd_per_million_tokens": 15.0
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "gemini",
+      "label": "Google Gemini",
+      "adapter": "gemini",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "env": "GOOGLE_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "gemini-3.8-flash",
+          "label": "Gemini 3.8 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.75,
+            "output_usd_per_million_tokens": 3.75
+          }
+        },
+        {
+          "model_id": "gemini-flash-latest",
+          "label": "Gemini Flash Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.75,
+            "output_usd_per_million_tokens": 3.75
+          }
+        },
+        {
+          "model_id": "gemini-3.7-flash",
+          "label": "Gemini 3.7 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.75,
+            "output_usd_per_million_tokens": 3.75
+          }
+        },
+        {
+          "model_id": "gemini-flash-lite-latest",
+          "label": "Gemini Flash-Lite Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 2.5
+          }
+        },
+        {
+          "model_id": "gemini-3.6-flash",
+          "label": "Gemini 3.6 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.75,
+            "output_usd_per_million_tokens": 3.75
+          }
+        },
+        {
+          "model_id": "gemini-3.5-flash-lite",
+          "label": "Gemini 3.5 Flash Lite",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 2.5
+          }
+        },
+        {
+          "model_id": "gemini-3.1-flash-lite-image",
+          "label": "Nano Banana 2 Lite",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": false,
+          "supports_reasoning": true,
+          "context": 65536,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.25,
+            "output_usd_per_million_tokens": 30.0
+          }
+        },
+        {
+          "model_id": "gemini-3.5-flash",
+          "label": "Gemini 3.5 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.5,
+            "output_usd_per_million_tokens": 9.0
+          }
+        },
+        {
+          "model_id": "gemini-3.1-flash-lite",
+          "label": "Gemini 3.1 Flash Lite",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.25,
+            "output_usd_per_million_tokens": 1.5
+          }
+        },
+        {
+          "model_id": "deep-research-preview-04-2026",
+          "label": "Deep Research Preview (Apr-21-2026)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 12.0
+          }
+        },
+        {
+          "model_id": "deep-research-max-preview-04-2026",
+          "label": "Deep Research Max Preview (Apr-21-2026)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 12.0
+          }
+        },
+        {
+          "model_id": "gemma-4-31b-it",
+          "label": "Gemma 4 31B IT",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": null
+        },
+        {
+          "model_id": "gemma-4-26b-a4b-it",
+          "label": "Gemma 4 26B A4B IT",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": null
+        },
+        {
+          "model_id": "gemini-3.1-flash-live-preview",
+          "label": "Gemini 3.1 Flash Live Preview",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": false,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.75,
+            "output_usd_per_million_tokens": 4.5
+          }
+        },
+        {
+          "model_id": "gemini-3.1-flash-lite-preview",
+          "label": "Gemini 3.1 Flash Lite Preview",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.25,
+            "output_usd_per_million_tokens": 1.5
+          }
+        },
+        {
+          "model_id": "gemini-3.1-pro-preview-customtools",
+          "label": "Gemini 3.1 Pro Preview Custom Tools",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 12.0
+          }
+        },
+        {
+          "model_id": "gemini-3.1-pro-preview",
+          "label": "Gemini 3.1 Pro Preview",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 12.0
+          }
+        },
+        {
+          "model_id": "gemini-3-flash-preview",
+          "label": "Gemini 3 Flash Preview",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.5,
+            "output_usd_per_million_tokens": 3.0
+          }
+        },
+        {
+          "model_id": "gemini-2.5-computer-use-preview-10-2025",
+          "label": "Gemini 2.5 Computer Use Preview 10-2025",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.25,
+            "output_usd_per_million_tokens": 10.0
+          }
+        },
+        {
+          "model_id": "gemini-2.5-pro",
+          "label": "Gemini 2.5 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.25,
+            "output_usd_per_million_tokens": 10.0
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "minimax",
+      "label": "MiniMax",
+      "adapter": "minimax",
+      "base_url": "https://api.minimax.io/v1",
+      "env": "MINIMAX_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "MiniMax-M3",
+          "label": "MiniMax-M3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 512000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "MiniMax-M2.7-highspeed",
+          "label": "MiniMax-M2.7-highspeed",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.4
+          }
+        },
+        {
+          "model_id": "MiniMax-M2.7",
+          "label": "MiniMax-M2.7",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "MiniMax-M2.5-highspeed",
+          "label": "MiniMax-M2.5-highspeed",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.4
+          }
+        },
+        {
+          "model_id": "MiniMax-M2.5",
+          "label": "MiniMax-M2.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "MiniMax-M2.1",
+          "label": "MiniMax-M2.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "MiniMax-M2",
+          "label": "MiniMax-M2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "deepseek",
+      "label": "DeepSeek",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.deepseek.com",
+      "env": "DEEPSEEK_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "deepseek-v4-flash-vision-exp",
+          "label": "DeepSeek V4 Flash Vision Exp",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.6
+          }
+        },
+        {
+          "model_id": "deepseek-v4-flash",
+          "label": "DeepSeek V4 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.6
+          }
+        },
+        {
+          "model_id": "deepseek-flash",
+          "label": "DeepSeek V4.1 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.6
+          }
+        },
+        {
+          "model_id": "deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.435,
+            "output_usd_per_million_tokens": 0.87
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "groq",
+      "label": "Groq",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.groq.com/openai/v1",
+      "env": "GROQ_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "qwen/qwen3.8-27b",
+          "label": "Qwen3.8 27B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131042,
+          "max_output": 16384,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.8,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "openai/gpt-oss-safeguard-20b",
+          "label": "Safety GPT OSS 20B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.075,
+            "output_usd_per_million_tokens": 0.3
+          }
+        },
+        {
+          "model_id": "qwen/qwen3.6-27b",
+          "label": "Qwen3.6 27B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 16384,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 3.0
+          }
+        },
+        {
+          "model_id": "openai/gpt-oss-120b",
+          "label": "GPT OSS 120B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.6
+          }
+        },
+        {
+          "model_id": "openai/gpt-oss-20b",
+          "label": "GPT OSS 20B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.075,
+            "output_usd_per_million_tokens": 0.3
+          }
+        },
+        {
+          "model_id": "llama-3.3-70b-versatile",
+          "label": "Llama 3.3 70B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 131072,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.59,
+            "output_usd_per_million_tokens": 0.79
+          }
+        },
+        {
+          "model_id": "llama-3.1-8b-instant",
+          "label": "Llama 3.1 8B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 131072,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.05,
+            "output_usd_per_million_tokens": 0.08
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "mistral",
+      "label": "Mistral",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.mistral.ai/v1",
+      "env": "MISTRAL_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "zai-glm-5-2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "mistral-medium-latest",
+          "label": "Mistral Medium (latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.5,
+            "output_usd_per_million_tokens": 7.5
+          }
+        },
+        {
+          "model_id": "mistral-medium-2604",
+          "label": "Mistral Medium 3.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.5,
+            "output_usd_per_million_tokens": 7.5
+          }
+        },
+        {
+          "model_id": "mistral-small-latest",
+          "label": "Mistral Small (latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 256000,
+          "max_output": 256000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.6
+          }
+        },
+        {
+          "model_id": "mistral-small-2603",
+          "label": "Mistral Small 4",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 256000,
+          "max_output": 256000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.6
+          }
+        },
+        {
+          "model_id": "labs-devstral-small-2512",
+          "label": "Devstral Small 2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 256000,
+          "max_output": 256000,
+          "pricing": null
+        },
+        {
+          "model_id": "devstral-latest",
+          "label": "Devstral 2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.4,
+            "output_usd_per_million_tokens": 2.0
+          }
+        },
+        {
+          "model_id": "devstral-2512",
+          "label": "Devstral 2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.4,
+            "output_usd_per_million_tokens": 2.0
+          }
+        },
+        {
+          "model_id": "mistral-large-latest",
+          "label": "Mistral Large (latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.5,
+            "output_usd_per_million_tokens": 1.5
+          }
+        },
+        {
+          "model_id": "mistral-large-2512",
+          "label": "Mistral Large 3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.5,
+            "output_usd_per_million_tokens": 1.5
+          }
+        },
+        {
+          "model_id": "devstral-medium-latest",
+          "label": "Devstral 2 (latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.4,
+            "output_usd_per_million_tokens": 2.0
+          }
+        },
+        {
+          "model_id": "mistral-medium-2508",
+          "label": "Mistral Medium 3.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.4,
+            "output_usd_per_million_tokens": 2.0
+          }
+        },
+        {
+          "model_id": "voxtral-small-latest",
+          "label": "Voxtral Small (latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 32000,
+          "max_output": 32000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1,
+            "output_usd_per_million_tokens": 0.3
+          }
+        },
+        {
+          "model_id": "devstral-small-2507",
+          "label": "Devstral Small",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 128000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1,
+            "output_usd_per_million_tokens": 0.3
+          }
+        },
+        {
+          "model_id": "devstral-medium-2507",
+          "label": "Devstral Medium",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 128000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.4,
+            "output_usd_per_million_tokens": 2.0
+          }
+        },
+        {
+          "model_id": "mistral-small-2506",
+          "label": "Mistral Small 3.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 128000,
+          "max_output": 16384,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1,
+            "output_usd_per_million_tokens": 0.3
+          }
+        },
+        {
+          "model_id": "mistral-medium-2505",
+          "label": "Mistral Medium 3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 131072,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.4,
+            "output_usd_per_million_tokens": 2.0
+          }
+        },
+        {
+          "model_id": "devstral-small-2505",
+          "label": "Devstral Small 2505",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 128000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1,
+            "output_usd_per_million_tokens": 0.3
+          }
+        },
+        {
+          "model_id": "magistral-medium-latest",
+          "label": "Magistral Medium (latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 128000,
+          "max_output": 16384,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 5.0
+          }
+        },
+        {
+          "model_id": "magistral-small",
+          "label": "Magistral Small",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 128000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.5,
+            "output_usd_per_million_tokens": 1.5
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "xai",
+      "label": "xAI (Grok)",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.x.ai/v1",
+      "env": "XAI_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "grok-4.6",
+          "label": "Grok 4.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 500000,
+          "max_output": 500000,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "grok-4.5",
+          "label": "Grok 4.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 500000,
+          "max_output": 500000,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "grok-4.3",
+          "label": "Grok 4.3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 30000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.25,
+            "output_usd_per_million_tokens": 2.5
+          }
+        },
+        {
+          "model_id": "grok-build-0.1",
+          "label": "Grok Build 0.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 256000,
+          "max_output": 256000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 2.0
+          }
+        },
+        {
+          "model_id": "grok-4.20-0309-reasoning",
+          "label": "Grok 4.20 (Reasoning)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 30000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.25,
+            "output_usd_per_million_tokens": 2.5
+          }
+        },
+        {
+          "model_id": "grok-4.20-0309-non-reasoning",
+          "label": "Grok 4.20 (Non-Reasoning)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 1000000,
+          "max_output": 30000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.25,
+            "output_usd_per_million_tokens": 2.5
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "togetherai",
+      "label": "Together AI",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.together.xyz/v1",
+      "env": "TOGETHER_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4.1-Flash",
+          "label": "DeepSeek V4.1 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.3-Flash",
+          "label": "GLM-5.3-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048575,
+          "max_output": 400000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.5
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Pro-0813",
+          "label": "DeepSeek V4 Pro 0813",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.32,
+            "output_usd_per_million_tokens": 3.96
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.3",
+          "label": "GLM-5.3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Flash-0731",
+          "label": "DeepSeek V4 Flash 0731",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.28
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K3",
+          "label": "Kimi K3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 3.0,
+            "output_usd_per_million_tokens": 15.0
+          }
+        },
+        {
+          "model_id": "thinkingmachines/Inkling",
+          "label": "Inkling",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 524288,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 4.05
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.1",
+          "label": "GLM-5.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 202752,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+          "label": "Llama 3.3 70B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 131072,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.04,
+            "output_usd_per_million_tokens": 1.04
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.7-Max",
+          "label": "Qwen3.7 Max",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 1000000,
+          "max_output": 500000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.25,
+            "output_usd_per_million_tokens": 3.75
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 512000,
+          "max_output": 164000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.5-397B-A17B",
+          "label": "Qwen3.5 397B A17B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 130000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 3.6
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K2.7-Code",
+          "label": "Kimi K2.7 Code",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "MiniMaxAI/MiniMax-M3",
+          "label": "MiniMax-M3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 524288,
+          "max_output": 250000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "label": "Nemotron 3 Ultra 550B A55B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 512300,
+          "max_output": 512300,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 3.6
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.6-Plus",
+          "label": "Qwen3.6 Plus",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 500000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.5,
+            "output_usd_per_million_tokens": 3.0
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Pro",
+          "label": "DeepSeek V4 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 512000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.74,
+            "output_usd_per_million_tokens": 3.48
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K2.6",
+          "label": "Kimi K2.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.2,
+            "output_usd_per_million_tokens": 4.5
+          }
+        },
+        {
+          "model_id": "google/gemma-4-31B-it",
+          "label": "Gemma 4 31B Instruct",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.39,
+            "output_usd_per_million_tokens": 0.97
+          }
+        },
+        {
+          "model_id": "MiniMaxAI/MiniMax-M2.7",
+          "label": "MiniMax-M2.7",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 202752,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "cerebras",
+      "label": "Cerebras",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.cerebras.ai/v1",
+      "env": "CEREBRAS_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "qwen-3.8-27b",
+          "label": "Qwen3.8 27B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 65536,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.99,
+            "output_usd_per_million_tokens": 1.49
+          }
+        },
+        {
+          "model_id": "gpt-oss-120b",
+          "label": "GPT OSS 120B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 40960,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.35,
+            "output_usd_per_million_tokens": 0.75
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "deepinfra",
+      "label": "DeepInfra",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.deepinfra.com/v1/openai",
+      "env": "DEEPINFRA_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4.1-Flash",
+          "label": "DeepSeek V4.1 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 0.6
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.3-Flash",
+          "label": "GLM-5.3-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.5
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.8-Flash",
+          "label": "Qwen3.8 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.113,
+            "output_usd_per_million_tokens": 0.382
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Pro-0813",
+          "label": "DeepSeek V4 Pro 0813",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.3,
+            "output_usd_per_million_tokens": 2.6
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp",
+          "label": "DeepSeek V4 Flash Vision Exp",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.44,
+            "output_usd_per_million_tokens": 1.32
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.3",
+          "label": "GLM-5.3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.2,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.8-27B",
+          "label": "Qwen3.8 27B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 2.5
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.8-2.4T-A95B",
+          "label": "Qwen3.8 2.4T A95B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.8-Max",
+          "label": "Qwen3.8 Max",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 256000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.65,
+            "output_usd_per_million_tokens": 4.951
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Flash-0731",
+          "label": "DeepSeek V4 Flash 0731",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.06,
+            "output_usd_per_million_tokens": 0.18
+          }
+        },
+        {
+          "model_id": "thinkingmachines/Inkling-Small",
+          "label": "Inkling Small",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 524288,
+          "max_output": 1048576,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.45,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K3",
+          "label": "Kimi K3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.85,
+            "output_usd_per_million_tokens": 14.25
+          }
+        },
+        {
+          "model_id": "thinkingmachines/Inkling",
+          "label": "Inkling",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 524288,
+          "max_output": 1048576,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 4.05
+          }
+        },
+        {
+          "model_id": "tencent/Hy3",
+          "label": "Hy3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.58
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.75,
+            "output_usd_per_million_tokens": 2.4
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K2.7-Code",
+          "label": "Kimi K2.7 Code",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.68,
+            "output_usd_per_million_tokens": 3.4
+          }
+        },
+        {
+          "model_id": "MiniMaxAI/MiniMax-M3",
+          "label": "MiniMax-M3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 524288,
+          "max_output": 512000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.28,
+            "output_usd_per_million_tokens": 1.1
+          }
+        },
+        {
+          "model_id": "stepfun-ai/Step-3.7-Flash",
+          "label": "Step 3.7 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 256000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 1.15
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.7-Max",
+          "label": "Qwen3.7 Max",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 256000,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.5,
+            "output_usd_per_million_tokens": 7.5
+          }
+        },
+        {
+          "model_id": "nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning",
+          "label": "Nemotron 3 Nano Omni 30B A3B Reasoning",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 0.8
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "fireworks-ai",
+      "label": "Fireworks AI",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.fireworks.ai/inference/v1",
+      "env": "FIREWORKS_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "accounts/fireworks/routers/qwen-max-latest",
+          "label": "Qwen Max Latest (Qwen3.8 Max)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/routers/minimax-latest",
+          "label": "MiniMax Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 512000,
+          "max_output": 512000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/routers/kimi-latest",
+          "label": "Kimi Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 3.0,
+            "output_usd_per_million_tokens": 15.0
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/routers/kimi-fast-latest",
+          "label": "Kimi Fast Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 4.5,
+            "output_usd_per_million_tokens": 22.5
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/routers/glm-latest",
+          "label": "GLM Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048573,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/routers/glm-flash-latest",
+          "label": "GLM Flash Latest (GLM 5.3 Flash)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048573,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.5
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/routers/glm-fast-latest",
+          "label": "GLM 5.3 Fast (Latest)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048572,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.1,
+            "output_usd_per_million_tokens": 6.6
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/routers/deepseek-flash-latest",
+          "label": "DeepSeek Flash Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.22,
+            "output_usd_per_million_tokens": 0.66
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/models/deepseek-v4p1-flash",
+          "label": "DeepSeek V4.1 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.22,
+            "output_usd_per_million_tokens": 0.66
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/routers/glm-5p3-fast",
+          "label": "GLM 5.3 Fast",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048572,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.1,
+            "output_usd_per_million_tokens": 6.6
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/models/glm-5p3-flash",
+          "label": "GLM 5.3 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048573,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.5
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/models/glm-5p3",
+          "label": "GLM 5.3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048573,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/routers/deepseek-pro-latest",
+          "label": "DeepSeek Pro Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.32,
+            "output_usd_per_million_tokens": 3.96
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/models/deepseek-v4-pro-0813",
+          "label": "DeepSeek V4 Pro 0813",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.32,
+            "output_usd_per_million_tokens": 3.96
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/models/deepseek-v4-flash-vision-exp",
+          "label": "DeepSeek V4 Flash Vision Exp",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.22,
+            "output_usd_per_million_tokens": 0.66
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/models/qwen3p8-2p4t-a95b",
+          "label": "Qwen3.8 2.4T A95B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/models/nemotron-lightning-3p5-30b-a3b",
+          "label": "Nemotron 3.5 Lightning 30B A3B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.05,
+            "output_usd_per_million_tokens": 0.2
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/models/muse-glimmer-30b",
+          "label": "Muse Glimmer 30B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.35,
+            "output_usd_per_million_tokens": 1.5
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/models/qwen3p8-max",
+          "label": "Qwen3.8 Max",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "accounts/fireworks/models/deepseek-v4-flash-0731",
+          "label": "DeepSeek V4 Flash 0731",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.22,
+            "output_usd_per_million_tokens": 0.66
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "openrouter",
+      "label": "OpenRouter",
+      "adapter": "openai_compatible",
+      "base_url": "https://openrouter.ai/api/v1",
+      "env": "OPENROUTER_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "~deepseek/deepseek-pro-latest",
+          "label": "DeepSeek Pro Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.66,
+            "output_usd_per_million_tokens": 1.98
+          }
+        },
+        {
+          "model_id": "~deepseek/deepseek-flash-latest",
+          "label": "DeepSeek Flash Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 943718,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.6
+          }
+        },
+        {
+          "model_id": "~openai/gpt-terra-latest",
+          "label": "GPT Terra Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 12.0
+          }
+        },
+        {
+          "model_id": "~openai/gpt-sol-latest",
+          "label": "GPT Sol Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 10.0
+          }
+        },
+        {
+          "model_id": "~openai/gpt-luna-latest",
+          "label": "GPT Luna Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "~openai/gpt-astra-latest",
+          "label": "GPT Astra Latest",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 10.0,
+            "output_usd_per_million_tokens": 50.0
+          }
+        },
+        {
+          "model_id": "sakana/fugu-ultra-v2",
+          "label": "Fugu Ultra v2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 5.0,
+            "output_usd_per_million_tokens": 30.0
+          }
+        },
+        {
+          "model_id": "sakana/fugu-max",
+          "label": "Fugu Max",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "inclusionai/ling-3.0-flash-vl:free",
+          "label": "Ling 3.0 Flash VL (free)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": false,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": null
+        },
+        {
+          "model_id": "inclusionai/ling-3.0-flash-vl",
+          "label": "Ling 3.0 Flash VL",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.06,
+            "output_usd_per_million_tokens": 0.18
+          }
+        },
+        {
+          "model_id": "deepseek/deepseek-v4.1-flash",
+          "label": "DeepSeek V4.1 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.6
+          }
+        },
+        {
+          "model_id": "nex-agi/nex-n2.5-pro:free",
+          "label": "Nex-N2.5-Pro (free)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 235929,
+          "pricing": null
+        },
+        {
+          "model_id": "nex-agi/nex-n2.5-mini:free",
+          "label": "Nex-N2.5-Mini (free)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 235929,
+          "pricing": null
+        },
+        {
+          "model_id": "inception/mercury-2.5",
+          "label": "Mercury 2.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 260000,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.04,
+            "output_usd_per_million_tokens": 0.15
+          }
+        },
+        {
+          "model_id": "openai/gpt-6-astra-pro",
+          "label": "GPT-6 Astra Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 10.0,
+            "output_usd_per_million_tokens": 50.0
+          }
+        },
+        {
+          "model_id": "openai/gpt-6-astra",
+          "label": "GPT-6 Astra",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1050000,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 10.0,
+            "output_usd_per_million_tokens": 50.0
+          }
+        },
+        {
+          "model_id": "inclusionai/ling-3.0-flash-sante:free",
+          "label": "Ling 3.0 Flash Sante (free)",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": false,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": null
+        },
+        {
+          "model_id": "qwen/qwen3.8-max-0902",
+          "label": "Qwen3.8 Max 0902",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "meta/muse-spark-1.3-contributor",
+          "label": "Muse Spark 1.3 Contributor",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 943718,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1,
+            "output_usd_per_million_tokens": 0.2
+          }
+        },
+        {
+          "model_id": "meta/muse-spark-1.3",
+          "label": "Muse Spark 1.3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 943718,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.25,
+            "output_usd_per_million_tokens": 4.25
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "novita-ai",
+      "label": "NovitaAI",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.novita.ai/openai",
+      "env": "NOVITA_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "moonshotai/kimi-k3",
+          "label": "Kimi K3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 1048576,
+          "pricing": {
+            "input_usd_per_million_tokens": 3.0,
+            "output_usd_per_million_tokens": 15.0
+          }
+        },
+        {
+          "model_id": "moonshotai/kimi-k2-thinking",
+          "label": "Kimi K2 Thinking",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.5
+          }
+        },
+        {
+          "model_id": "inclusionai/ling-2.6-1t",
+          "label": "Ling-2.6-1T",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 2.5
+          }
+        },
+        {
+          "model_id": "baidu/ernie-4.5-vl-28b-a3b",
+          "label": "ERNIE 4.5 VL 28B A3B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 30000,
+          "max_output": 8000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.56
+          }
+        },
+        {
+          "model_id": "zai-org/glm-5.2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "moonshotai/kimi-k2.7-code",
+          "label": "Kimi K2.7 Code",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "xiaomimimo/mimo-v2.5-pro",
+          "label": "MiMo-V2.5-Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.522,
+            "output_usd_per_million_tokens": 1.044
+          }
+        },
+        {
+          "model_id": "xiaomimimo/mimo-v2-pro",
+          "label": "MiMo-V2-Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "qwen/qwen3.7-max",
+          "label": "Qwen3.7-Max",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.25,
+            "output_usd_per_million_tokens": 3.75
+          }
+        },
+        {
+          "model_id": "minimax/minimax-m2.7-highspeed",
+          "label": "MiniMax-M2.7-highspeed",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.4
+          }
+        },
+        {
+          "model_id": "inclusionai/ring-2.6-1t",
+          "label": "Ring-2.6-1T",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 2.5
+          }
+        },
+        {
+          "model_id": "inclusionai/ling-2.6-flash",
+          "label": "Ling-2.6-flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1,
+            "output_usd_per_million_tokens": 0.3
+          }
+        },
+        {
+          "model_id": "deepseek/deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 393216,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.6,
+            "output_usd_per_million_tokens": 3.2
+          }
+        },
+        {
+          "model_id": "deepseek/deepseek-v4-flash",
+          "label": "DeepSeek V4 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 393216,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.28
+          }
+        },
+        {
+          "model_id": "moonshotai/kimi-k2.6",
+          "label": "Kimi K2.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.8,
+            "output_usd_per_million_tokens": 3.4
+          }
+        },
+        {
+          "model_id": "google/gemma-4-31b-it",
+          "label": "Gemma 4 31B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.4
+          }
+        },
+        {
+          "model_id": "google/gemma-4-26b-a4b-it",
+          "label": "Gemma 4 26B A4B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.13,
+            "output_usd_per_million_tokens": 0.4
+          }
+        },
+        {
+          "model_id": "zai-org/glm-5.1",
+          "label": "GLM-5.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.38,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "minimax/minimax-m2.7",
+          "label": "MiniMax M2.7",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "qwen/qwen3.5-35b-a3b",
+          "label": "Qwen3.5-35B-A3B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.25,
+            "output_usd_per_million_tokens": 2.0
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "nebius",
+      "label": "Nebius",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.tokenfactory.nebius.com/v1",
+      "env": "NEBIUS_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "zai-org/GLM-5.3-Flash",
+          "label": "GLM-5.3-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1024000,
+          "max_output": 1024000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.5
+          }
+        },
+        {
+          "model_id": "nvidia/Nemotron-3_5-Lightning",
+          "label": "Nemotron 3.5 Lightning 30B A3B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 1048576,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.06,
+            "output_usd_per_million_tokens": 0.24
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Flash-0731",
+          "label": "DeepSeek V4 Flash 0731",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1024000,
+          "max_output": 1024000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.28
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K3",
+          "label": "Kimi K3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 8000,
+          "pricing": {
+            "input_usd_per_million_tokens": 3.0,
+            "output_usd_per_million_tokens": 15.0
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 1048576,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K2.7-Code",
+          "label": "Kimi K2.7 Code",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 8000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "nvidia/Nemotron-3-Ultra-550b-a55b",
+          "label": "Nemotron 3 Ultra 550B A55B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 1048576,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 3.0
+          }
+        },
+        {
+          "model_id": "MiniMaxAI/MiniMax-M3",
+          "label": "MiniMax-M3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 1048576,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.5-397B-A17B",
+          "label": "Qwen3.5-397B-A17B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 8192,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 3.6
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Pro",
+          "label": "DeepSeek V4 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 1048576,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.75,
+            "output_usd_per_million_tokens": 3.5
+          }
+        },
+        {
+          "model_id": "nvidia/nemotron-3-super-120b-a12b",
+          "label": "Nemotron-3-Super-120B-A12B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 0.9
+          }
+        },
+        {
+          "model_id": "openai/gpt-oss-120b",
+          "label": "gpt-oss-120b",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 8192,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.6
+          }
+        },
+        {
+          "model_id": "google/gemma-3-27b-it",
+          "label": "Gemma-3-27b-it",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 110000,
+          "max_output": 8192,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1,
+            "output_usd_per_million_tokens": 0.3
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+          "label": "Qwen3-30B-A3B-Instruct-2507",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 8192,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1,
+            "output_usd_per_million_tokens": 0.3
+          }
+        },
+        {
+          "model_id": "NousResearch/Hermes-4-405B",
+          "label": "Hermes-4-405B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 8192,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 3.0
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3-235B-A22B-Instruct-2507",
+          "label": "Qwen3 235B A22B Instruct 2507",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 8192,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 0.6
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "siliconflow",
+      "label": "SiliconFlow",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.siliconflow.com/v1",
+      "env": "SILICONFLOW_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "zai-org/GLM-5",
+          "label": "zai-org/GLM-5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 205000,
+          "max_output": 205000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 2.55
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K2.6",
+          "label": "moonshotai/Kimi-K2.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262000,
+          "max_output": 262000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.77,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "MiniMaxAI/MiniMax-M2.5",
+          "label": "MiniMaxAI/MiniMax-M2.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": false,
+          "supports_reasoning": false,
+          "context": 197000,
+          "max_output": 131000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1049000,
+          "max_output": 262000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Pro",
+          "label": "DeepSeek V4 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.74,
+            "output_usd_per_million_tokens": 3.48
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Flash",
+          "label": "DeepSeek V4 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.28
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.5-9B",
+          "label": "Qwen/Qwen3.5-9B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1,
+            "output_usd_per_million_tokens": 0.15
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.6-27B",
+          "label": "Qwen3.6 27B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 3.2
+          }
+        },
+        {
+          "model_id": "tencent/Hy3-preview",
+          "label": "Hy3 preview",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.066,
+            "output_usd_per_million_tokens": 0.26
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.6-35B-A3B",
+          "label": "Qwen3.6 35B-A3B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 1.6
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.1",
+          "label": "zai-org/GLM-5.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 205000,
+          "max_output": 205000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "google/gemma-4-31B-it",
+          "label": "Gemma 4 31B IT",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.13,
+            "output_usd_per_million_tokens": 0.4
+          }
+        },
+        {
+          "model_id": "google/gemma-4-26B-A4B-it",
+          "label": "Gemma 4 26B A4B IT",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.12,
+            "output_usd_per_million_tokens": 0.4
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5V-Turbo",
+          "label": "zai-org/GLM-5V-Turbo",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.2,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.5-35B-A3B",
+          "label": "Qwen3.5 35B-A3B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.24,
+            "output_usd_per_million_tokens": 1.8
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.5-27B",
+          "label": "Qwen3.5 27B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.25,
+            "output_usd_per_million_tokens": 2.0
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.5-122B-A10B",
+          "label": "Qwen3.5 122B-A10B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.26,
+            "output_usd_per_million_tokens": 2.08
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.5-397B-A17B",
+          "label": "Qwen3.5 397B-A17B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.39,
+            "output_usd_per_million_tokens": 2.34
+          }
+        },
+        {
+          "model_id": "stepfun-ai/Step-3.5-Flash",
+          "label": "stepfun-ai/Step-3.5-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262000,
+          "max_output": 262000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1,
+            "output_usd_per_million_tokens": 0.3
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K2.5",
+          "label": "moonshotai/Kimi-K2.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262000,
+          "max_output": 262000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.45,
+            "output_usd_per_million_tokens": 2.25
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "huggingface",
+      "label": "Hugging Face",
+      "adapter": "openai_compatible",
+      "base_url": "https://router.huggingface.co/v1",
+      "env": "HF_TOKEN",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4.1-Flash",
+          "label": "DeepSeek V4.1 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.3-Flash",
+          "label": "GLM-5.3-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.5
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Pro-0813",
+          "label": "DeepSeek V4 Pro 0813",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.32,
+            "output_usd_per_million_tokens": 3.96
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Flash-Vision-Exp",
+          "label": "DeepSeek V4 Flash Vision Exp",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.44,
+            "output_usd_per_million_tokens": 1.32
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.3",
+          "label": "GLM-5.3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.8-27B",
+          "label": "Qwen3.8 27B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.4,
+            "output_usd_per_million_tokens": 3.0
+          }
+        },
+        {
+          "model_id": "Qwen/Qwen3.8-2.4T-A95B",
+          "label": "Qwen3.8 2.4T A95B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.5,
+            "output_usd_per_million_tokens": 6.25
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Flash-0731",
+          "label": "DeepSeek V4 Flash 0731",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.28
+          }
+        },
+        {
+          "model_id": "thinkingmachines/Inkling-Small",
+          "label": "Inkling Small",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 524288,
+          "max_output": 1048576,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.5,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K3",
+          "label": "Kimi K3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 3.0,
+            "output_usd_per_million_tokens": 15.0
+          }
+        },
+        {
+          "model_id": "thinkingmachines/Inkling",
+          "label": "Inkling",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 1048576,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 4.05
+          }
+        },
+        {
+          "model_id": "tencent/Hy3",
+          "label": "Hy3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 128000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.58
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K2.7-Code",
+          "label": "Kimi K2.7 Code",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "MiniMaxAI/MiniMax-M3",
+          "label": "MiniMax-M3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 524288,
+          "max_output": 512000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "stepfun-ai/Step-3.7-Flash",
+          "label": "Step 3.7 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 256000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 1.15
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Pro",
+          "label": "DeepSeek V4 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 393216,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.435,
+            "output_usd_per_million_tokens": 0.87
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Flash",
+          "label": "DeepSeek V4 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.28
+          }
+        },
+        {
+          "model_id": "XiaomiMiMo/MiMo-V2.5-Pro",
+          "label": "MiMo-V2.5-Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 3.0
+          }
+        },
+        {
+          "model_id": "XiaomiMiMo/MiMo-V2.5",
+          "label": "MiMo-V2.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.4,
+            "output_usd_per_million_tokens": 2.0
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "nvidia",
+      "label": "NVIDIA NIM",
+      "adapter": "openai_compatible",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "env": "NVIDIA_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "z-ai/glm-5.3-flash",
+          "label": "GLM-5.3-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": null
+        },
+        {
+          "model_id": "deepseek-ai/deepseek-v4-pro-0813",
+          "label": "DeepSeek V4 Pro 0813",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": null
+        },
+        {
+          "model_id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+          "label": "Nemotron 3.5 Lightning 30B A3B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": null
+        },
+        {
+          "model_id": "meta/muse-glimmer-30b",
+          "label": "Muse Glimmer 30B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 131072,
+          "pricing": null
+        },
+        {
+          "model_id": "deepseek-ai/deepseek-v4-flash-0731",
+          "label": "DeepSeek V4 Flash 0731",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": null
+        },
+        {
+          "model_id": "moonshotai/kimi-k3",
+          "label": "Kimi K3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": null
+        },
+        {
+          "model_id": "thinkingmachines/inkling",
+          "label": "Inkling",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 16384,
+          "pricing": null
+        },
+        {
+          "model_id": "poolside/laguna-xs-2.1",
+          "label": "Laguna XS 2.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": false,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 16384,
+          "pricing": null
+        },
+        {
+          "model_id": "z-ai/glm-5.2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": null
+        },
+        {
+          "model_id": "nvidia/nemotron-3-ultra-550b-a55b",
+          "label": "Nemotron 3 Ultra 550B A55B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.5,
+            "output_usd_per_million_tokens": 2.5
+          }
+        },
+        {
+          "model_id": "minimaxai/minimax-m3",
+          "label": "MiniMax-M3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 16384,
+          "pricing": null
+        },
+        {
+          "model_id": "stepfun-ai/step-3.7-flash",
+          "label": "Step 3.7 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 256000,
+          "max_output": 16384,
+          "pricing": null
+        },
+        {
+          "model_id": "mistralai/mistral-medium-3.5-128b",
+          "label": "Mistral Medium 3.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": null
+        },
+        {
+          "model_id": "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+          "label": "Nemotron 3 Nano Omni",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 256000,
+          "max_output": 65536,
+          "pricing": null
+        },
+        {
+          "model_id": "deepseek-ai/deepseek-v4-pro",
+          "label": "DeepSeek V4 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 393216,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.435,
+            "output_usd_per_million_tokens": 0.87
+          }
+        },
+        {
+          "model_id": "deepseek-ai/deepseek-v4-flash",
+          "label": "DeepSeek V4 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 393216,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.28
+          }
+        },
+        {
+          "model_id": "moonshotai/kimi-k2.6",
+          "label": "Kimi K2.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": null
+        },
+        {
+          "model_id": "minimaxai/minimax-m2.7",
+          "label": "MiniMax-M2.7",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": null
+        },
+        {
+          "model_id": "google/gemma-4-31b-it",
+          "label": "Gemma-4-31B-IT",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 256000,
+          "max_output": 16384,
+          "pricing": null
+        },
+        {
+          "model_id": "nvidia/nemotron-voicechat",
+          "label": "nemotron-voicechat",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 128000,
+          "max_output": 8192,
+          "pricing": null
+        }
+      ]
+    },
+    {
+      "provider_id": "baseten",
+      "label": "Baseten",
+      "adapter": "openai_compatible",
+      "base_url": "https://inference.baseten.co/v1",
+      "env": "BASETEN_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4.1-Flash",
+          "label": "DeepSeek V4.1 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.3-Flash",
+          "label": "GLM 5.3 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.5
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Pro-0813",
+          "label": "DeepSeek V4 Pro 0813",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.32,
+            "output_usd_per_million_tokens": 3.96
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.3-Fast",
+          "label": "GLM 5.3 Fast",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.1,
+            "output_usd_per_million_tokens": 6.6
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.3",
+          "label": "GLM 5.3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Flash-0731",
+          "label": "DeepSeek V4 Flash 0731",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.13,
+            "output_usd_per_million_tokens": 0.26
+          }
+        },
+        {
+          "model_id": "thinkingmachines/inkling-small",
+          "label": "Inkling Small",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.5,
+            "output_usd_per_million_tokens": 1.2
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K3",
+          "label": "Kimi K3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 3.0,
+            "output_usd_per_million_tokens": 15.0
+          }
+        },
+        {
+          "model_id": "thinkingmachines/inkling",
+          "label": "Inkling",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 4.05
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.2-Fast",
+          "label": "GLM 5.2 Fast",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.1,
+            "output_usd_per_million_tokens": 6.6
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.2",
+          "label": "GLM 5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K2.7-Code",
+          "label": "Kimi K2.7 Code",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262000,
+          "max_output": 262000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B",
+          "label": "Nemotron Ultra",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 202800,
+          "max_output": 202800,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.4
+          }
+        },
+        {
+          "model_id": "deepseek-ai/DeepSeek-V4-Pro",
+          "label": "DeepSeek V4 Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.74,
+            "output_usd_per_million_tokens": 3.48
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K2.6",
+          "label": "Kimi K2.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262000,
+          "max_output": 262000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5.1",
+          "label": "GLM 5.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 202800,
+          "max_output": 202800,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.3,
+            "output_usd_per_million_tokens": 4.3
+          }
+        },
+        {
+          "model_id": "nvidia/Nemotron-120B-A12B",
+          "label": "Nemotron Super",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 202800,
+          "max_output": 202800,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 0.75
+          }
+        },
+        {
+          "model_id": "zai-org/GLM-5",
+          "label": "GLM 5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 202800,
+          "max_output": 202800,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 3.15
+          }
+        },
+        {
+          "model_id": "moonshotai/Kimi-K2.5",
+          "label": "Kimi K2.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262000,
+          "max_output": 262000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 3.0
+          }
+        },
+        {
+          "model_id": "MiniMaxAI/MiniMax-M2.5",
+          "label": "MiniMax-M2.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204000,
+          "max_output": 204000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 1.2
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "zai",
+      "label": "Z.AI (GLM)",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.z.ai/api/paas/v4",
+      "env": "ZHIPU_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "glm-5.3-flash",
+          "label": "GLM-5.3-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.075,
+            "output_usd_per_million_tokens": 0.25
+          }
+        },
+        {
+          "model_id": "glm-5.3",
+          "label": "GLM-5.3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "glm-5.2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "glm-5.1",
+          "label": "GLM-5.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "glm-5v-turbo",
+          "label": "GLM-5V-Turbo",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.2,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "glm-5-turbo",
+          "label": "GLM-5-Turbo",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.2,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "glm-5",
+          "label": "GLM-5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 3.2
+          }
+        },
+        {
+          "model_id": "glm-4.7-flashx",
+          "label": "GLM-4.7-FlashX",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.07,
+            "output_usd_per_million_tokens": 0.4
+          }
+        },
+        {
+          "model_id": "glm-4.7-flash",
+          "label": "GLM-4.7-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 131072,
+          "pricing": null
+        },
+        {
+          "model_id": "glm-4.7",
+          "label": "GLM-4.7",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.2
+          }
+        },
+        {
+          "model_id": "glm-4.6v",
+          "label": "GLM-4.6V",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 128000,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 0.9
+          }
+        },
+        {
+          "model_id": "glm-4.6",
+          "label": "GLM-4.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.2
+          }
+        },
+        {
+          "model_id": "glm-4.5v",
+          "label": "GLM-4.5V",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 64000,
+          "max_output": 16384,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 1.8
+          }
+        },
+        {
+          "model_id": "glm-4.5-flash",
+          "label": "GLM-4.5-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 98304,
+          "pricing": null
+        },
+        {
+          "model_id": "glm-4.5-air",
+          "label": "GLM-4.5-Air",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 98304,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 1.1
+          }
+        },
+        {
+          "model_id": "glm-4.5",
+          "label": "GLM-4.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 98304,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.2
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "zhipuai",
+      "label": "Zhipu AI",
+      "adapter": "openai_compatible",
+      "base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "env": "ZHIPU_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "glm-5.3-flash",
+          "label": "GLM-5.3-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.075,
+            "output_usd_per_million_tokens": 0.25
+          }
+        },
+        {
+          "model_id": "glm-5.3",
+          "label": "GLM-5.3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "glm-5.2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "glm-5v-turbo",
+          "label": "GLM-5V-Turbo",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 5.0,
+            "output_usd_per_million_tokens": 22.0
+          }
+        },
+        {
+          "model_id": "glm-5.1",
+          "label": "GLM-5.1",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "glm-5",
+          "label": "GLM-5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.0,
+            "output_usd_per_million_tokens": 3.2
+          }
+        },
+        {
+          "model_id": "glm-4.7-flashx",
+          "label": "GLM-4.7-FlashX",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.07,
+            "output_usd_per_million_tokens": 0.4
+          }
+        },
+        {
+          "model_id": "glm-4.7-flash",
+          "label": "GLM-4.7-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 200000,
+          "max_output": 131072,
+          "pricing": null
+        },
+        {
+          "model_id": "glm-4.7",
+          "label": "GLM-4.7",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.2
+          }
+        },
+        {
+          "model_id": "glm-4.6v",
+          "label": "GLM-4.6V",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 128000,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 0.9
+          }
+        },
+        {
+          "model_id": "glm-4.6",
+          "label": "GLM-4.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 204800,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.2
+          }
+        },
+        {
+          "model_id": "glm-4.5v",
+          "label": "GLM-4.5V",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 64000,
+          "max_output": 16384,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 1.8
+          }
+        },
+        {
+          "model_id": "glm-4.5-flash",
+          "label": "GLM-4.5-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 98304,
+          "pricing": null
+        },
+        {
+          "model_id": "glm-4.5-air",
+          "label": "GLM-4.5-Air",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 98304,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 1.1
+          }
+        },
+        {
+          "model_id": "glm-4.5",
+          "label": "GLM-4.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 131072,
+          "max_output": 98304,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 2.2
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "alibaba",
+      "label": "Alibaba (Qwen)",
+      "adapter": "openai_compatible",
+      "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      "env": "DASHSCOPE_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "qwen3.8-flash",
+          "label": "Qwen3.8 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.15,
+            "output_usd_per_million_tokens": 0.47
+          }
+        },
+        {
+          "model_id": "qwen3.8-max",
+          "label": "Qwen3.8 Max",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.0,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "deepseek-v4-flash-0731",
+          "label": "DeepSeek V4 Flash 0731",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 384000,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 0.4
+          }
+        },
+        {
+          "model_id": "glm-5.2",
+          "label": "GLM-5.2",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.4,
+            "output_usd_per_million_tokens": 4.4
+          }
+        },
+        {
+          "model_id": "qwen3.7-plus",
+          "label": "Qwen3.7 Plus",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.5,
+            "output_usd_per_million_tokens": 3.0
+          }
+        },
+        {
+          "model_id": "qwen3.7-max",
+          "label": "Qwen3.7 Max",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 2.5,
+            "output_usd_per_million_tokens": 7.5
+          }
+        },
+        {
+          "model_id": "qwen3.6-flash",
+          "label": "Qwen3.6 Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.1875,
+            "output_usd_per_million_tokens": 1.125
+          }
+        },
+        {
+          "model_id": "qwen3.6-27b",
+          "label": "Qwen3.6 27B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 3.6
+          }
+        },
+        {
+          "model_id": "qwen3.6-max-preview",
+          "label": "Qwen3.6 Max Preview",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.3,
+            "output_usd_per_million_tokens": 7.8
+          }
+        },
+        {
+          "model_id": "qwen3.6-35b-a3b",
+          "label": "Qwen3.6 35B-A3B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.248,
+            "output_usd_per_million_tokens": 1.485
+          }
+        },
+        {
+          "model_id": "qwen3.6-plus",
+          "label": "Qwen3.6 Plus",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.5,
+            "output_usd_per_million_tokens": 3.0
+          }
+        },
+        {
+          "model_id": "qwen3.5-35b-a3b",
+          "label": "Qwen3.5 35B-A3B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.25,
+            "output_usd_per_million_tokens": 2.0
+          }
+        },
+        {
+          "model_id": "qwen3.5-27b",
+          "label": "Qwen3.5 27B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.3,
+            "output_usd_per_million_tokens": 2.4
+          }
+        },
+        {
+          "model_id": "qwen3.5-122b-a10b",
+          "label": "Qwen3.5 122B-A10B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.4,
+            "output_usd_per_million_tokens": 3.2
+          }
+        },
+        {
+          "model_id": "qwen3.5-plus",
+          "label": "Qwen3.5 Plus",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1000000,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.4,
+            "output_usd_per_million_tokens": 2.4
+          }
+        },
+        {
+          "model_id": "qwen3.5-397b-a17b",
+          "label": "Qwen3.5 397B-A17B",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.6,
+            "output_usd_per_million_tokens": 3.6
+          }
+        },
+        {
+          "model_id": "qwen3-vl-plus",
+          "label": "Qwen3-VL Plus",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 32768,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.2,
+            "output_usd_per_million_tokens": 1.6
+          }
+        },
+        {
+          "model_id": "qwen3-max",
+          "label": "Qwen3 Max",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.2,
+            "output_usd_per_million_tokens": 6.0
+          }
+        },
+        {
+          "model_id": "qwen3-omni-flash-realtime",
+          "label": "Qwen3-Omni Flash Realtime",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": false,
+          "context": 65536,
+          "max_output": 16384,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.52,
+            "output_usd_per_million_tokens": 1.99
+          }
+        },
+        {
+          "model_id": "qwen3-omni-flash",
+          "label": "Qwen3-Omni Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 65536,
+          "max_output": 16384,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.43,
+            "output_usd_per_million_tokens": 1.66
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "moonshotai",
+      "label": "Moonshot (Kimi)",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.moonshot.ai/v1",
+      "env": "MOONSHOT_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "kimi-k3",
+          "label": "Kimi K3",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 3.0,
+            "output_usd_per_million_tokens": 15.0
+          }
+        },
+        {
+          "model_id": "kimi-k2.7-code-highspeed",
+          "label": "Kimi K2.7 Code HighSpeed",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.9,
+            "output_usd_per_million_tokens": 8.0
+          }
+        },
+        {
+          "model_id": "kimi-k2.7-code",
+          "label": "Kimi K2.7 Code",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 4.0
+          }
+        },
+        {
+          "model_id": "kimi-k2.6",
+          "label": "Kimi K2.6",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 262144,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.95,
+            "output_usd_per_million_tokens": 4.0
+          }
+        }
+      ]
+    },
+    {
+      "provider_id": "xiaomi",
+      "label": "Xiaomi MiMo",
+      "adapter": "openai_compatible",
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "env": "XIAOMI_API_KEY",
+      "auth_modes": [
+        "api_key"
+      ],
+      "supports_reasoning": true,
+      "models": [
+        {
+          "model_id": "mimo-v2.5-pro",
+          "label": "MiMo-V2.5-Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.435,
+            "output_usd_per_million_tokens": 0.87
+          }
+        },
+        {
+          "model_id": "mimo-v2.5",
+          "label": "MiMo-V2.5",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.28
+          }
+        },
+        {
+          "model_id": "mimo-v2-pro",
+          "label": "MiMo-V2-Pro",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.435,
+            "output_usd_per_million_tokens": 0.87
+          }
+        },
+        {
+          "model_id": "mimo-v2-omni",
+          "label": "MiMo-V2-Omni",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.28
+          }
+        },
+        {
+          "model_id": "mimo-v2-flash",
+          "label": "MiMo-V2-Flash",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 262144,
+          "max_output": 65536,
+          "pricing": {
+            "input_usd_per_million_tokens": 0.14,
+            "output_usd_per_million_tokens": 0.28
+          }
+        },
+        {
+          "model_id": "mimo-v2.5-pro-ultraspeed",
+          "label": "MiMo-V2.5-Pro-UltraSpeed",
+          "supports_tools": true,
+          "supports_streaming": true,
+          "supports_structured_output": true,
+          "supports_reasoning": true,
+          "context": 1048576,
+          "max_output": 131072,
+          "pricing": {
+            "input_usd_per_million_tokens": 1.305,
+            "output_usd_per_million_tokens": 2.61
+          }
+        }
+      ]
+    }
+  ]
+}

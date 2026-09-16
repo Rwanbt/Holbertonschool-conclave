@@ -1,30 +1,38 @@
-"""Registre contrôlé des providers et modèles — aucune base URL libre.
+"""Registre contrôlé des providers et modèles — piloté par le catalogue.
 
-Le frontend construit son sélecteur depuis `GET /api/providers` (métadonnées
-publiques uniquement). L'ajout d'un nouveau provider OpenAI-compatible
-(DeepSeek, Mistral, Groq, …) consiste à déclarer ici son endpoint officiel
-(allowlist) et sa fabrique : la base URL n'est JAMAIS saisie par l'utilisateur,
-afin d'éviter une primitive SSRF.
+Le catalogue (`catalog.py`, généré depuis models.dev) est l'UNIQUE source des
+providers, modèles, capacités, tarifs et endpoints (allowlist). Aucune base URL
+n'est saisie par l'utilisateur : l'ajout d'un provider se fait en l'ajoutant au
+catalogue puis en régénérant (`scripts/generate_provider_catalog.py`).
+
+Chaque provider est servi par l'adapter correspondant à son type :
+OpenAI-compatible (le plus courant), Anthropic (Messages), Gemini
+(generateContent), MiniMax (particularité `thinking` isolée).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable
 
 from .base import ProviderAdapter, ProviderError
-from .minimax import MINIMAX_PRICING, MINIMAX_DEFAULT_MODEL, MiniMaxAdapter
-from .openai import OPENAI_MODELS, OPENAI_BASE_URL, OpenAIAdapter
-from .anthropic import ANTHROPIC_BASE_URL, AnthropicAdapter
-from .gemini import GEMINI_BASE_URL, GeminiAdapter
+from .anthropic import AnthropicAdapter
+from .gemini import GeminiAdapter
+from .minimax import MiniMaxAdapter
+from .openai_compatible import OpenAICompatibleAdapter
+from .catalog import ALLOWED_BASE_URLS, CATALOG
 
 
 @dataclass(frozen=True)
 class ModelEntry:
     model_id: str
+    label: str = ""
     supports_tools: bool = True
     supports_streaming: bool = True
     supports_structured_output: bool = True
+    supports_reasoning: bool = False
+    context: int | None = None
+    max_output: int | None = None
     pricing: dict[str, Any] | None = None
 
 
@@ -35,115 +43,83 @@ class ProviderEntry:
     auth_modes: list[str]
     models: list[ModelEntry]
     factory: Callable[[str, str], ProviderAdapter]
+    base_url: str
+    adapter: str
+    env: str = ""
     supports_reasoning: bool = False
 
 
-#: Fabrique -> (api_key, model_id) -> adapter configuré.
-def _openai_factory(api_key: str, model_id: str) -> ProviderAdapter:
-    return OpenAIAdapter(api_key=api_key, model=model_id)
+def _factory_for(spec: dict[str, Any]) -> Callable[[str, str], ProviderAdapter]:
+    adapter = spec["adapter"]
+    provider_id = spec["provider_id"]
+    label = spec["label"]
+    base_url = spec["base_url"]
 
+    if adapter == "anthropic":
 
-def _minimax_factory(api_key: str, model_id: str) -> ProviderAdapter:
-    return MiniMaxAdapter(api_key=api_key, model=model_id)
+        def _anthropic(api_key: str, model_id: str) -> ProviderAdapter:
+            return AnthropicAdapter(api_key=api_key, model=model_id)
 
+        return _anthropic
+    if adapter == "gemini":
 
-def _anthropic_factory(api_key: str, model_id: str) -> ProviderAdapter:
-    return AnthropicAdapter(api_key=api_key, model=model_id)
+        def _gemini(api_key: str, model_id: str) -> ProviderAdapter:
+            return GeminiAdapter(api_key=api_key, model=model_id)
 
+        return _gemini
+    if adapter == "minimax":
 
-def _gemini_factory(api_key: str, model_id: str) -> ProviderAdapter:
-    return GeminiAdapter(api_key=api_key, model=model_id)
+        def _minimax(api_key: str, model_id: str) -> ProviderAdapter:
+            return MiniMaxAdapter(api_key=api_key, model=model_id)
 
+        return _minimax
 
-def _minimax_models() -> list[ModelEntry]:
-    return [
-        ModelEntry(
-            model_id=MINIMAX_DEFAULT_MODEL,
-            pricing=dict(MINIMAX_PRICING),
+    def _openai_compatible(api_key: str, model_id: str) -> ProviderAdapter:
+        return OpenAICompatibleAdapter(
+            api_key=api_key,
+            base_url=base_url,
+            model=model_id,
+            provider_id=provider_id,
+            label=label,
         )
-    ]
+
+    return _openai_compatible
 
 
-def _openai_models() -> list[ModelEntry]:
-    return [
-        ModelEntry(model_id=model_id, pricing=dict(price))
-        for model_id, price in OPENAI_MODELS.items()
-    ]
-
-
-REGISTRY: dict[str, ProviderEntry] = {
-    "minimax": ProviderEntry(
-        provider_id="minimax",
-        label="MiniMax",
-        auth_modes=["api_key"],
-        models=_minimax_models(),
-        factory=_minimax_factory,
-        supports_reasoning=False,
-    ),
-    "openai": ProviderEntry(
-        provider_id="openai",
-        label="OpenAI",
-        auth_modes=["api_key"],
-        models=_openai_models(),
-        factory=_openai_factory,
-        supports_reasoning=True,
-    ),
-    "anthropic": ProviderEntry(
-        provider_id="anthropic",
-        label="Anthropic",
-        auth_modes=["api_key"],
-        models=[
+def _build_registry() -> dict[str, ProviderEntry]:
+    registry: dict[str, ProviderEntry] = {}
+    for provider_id, spec in CATALOG.items():
+        models = [
             ModelEntry(
-                model_id="claude-3-5-haiku-latest",
-                pricing={
-                    "input_usd_per_million_tokens": 0.80,
-                    "output_usd_per_million_tokens": 4.00,
-                },
-            ),
-            ModelEntry(
-                model_id="claude-3-5-sonnet-latest",
-                pricing={
-                    "input_usd_per_million_tokens": 3.00,
-                    "output_usd_per_million_tokens": 15.00,
-                },
-            ),
-        ],
-        factory=_anthropic_factory,
-        supports_reasoning=True,
-    ),
-    "gemini": ProviderEntry(
-        provider_id="gemini",
-        label="Google Gemini",
-        auth_modes=["api_key"],
-        models=[
-            ModelEntry(
-                model_id="gemini-2.0-flash",
-                pricing={
-                    "input_usd_per_million_tokens": 0.10,
-                    "output_usd_per_million_tokens": 0.40,
-                },
-            ),
-            ModelEntry(
-                model_id="gemini-2.5-flash",
-                pricing={
-                    "input_usd_per_million_tokens": 0.30,
-                    "output_usd_per_million_tokens": 2.50,
-                },
-            ),
-        ],
-        factory=_gemini_factory,
-        supports_reasoning=True,
-    ),
-}
+                model_id=model["model_id"],
+                label=model.get("label", model["model_id"]),
+                supports_tools=model.get("supports_tools", True),
+                supports_streaming=model.get("supports_streaming", True),
+                supports_structured_output=model.get(
+                    "supports_structured_output", True
+                ),
+                supports_reasoning=model.get("supports_reasoning", False),
+                context=model.get("context"),
+                max_output=model.get("max_output"),
+                pricing=model.get("pricing"),
+            )
+            for model in spec["models"]
+        ]
+        registry[provider_id] = ProviderEntry(
+            provider_id=provider_id,
+            label=spec["label"],
+            auth_modes=list(spec.get("auth_modes", ["api_key"])),
+            models=models,
+            factory=_factory_for(spec),
+            base_url=spec["base_url"],
+            adapter=spec["adapter"],
+            env=spec.get("env", ""),
+            supports_reasoning=any(model.supports_reasoning for model in models),
+        )
+    return registry
 
-#: Endpoints autorisés, utilisés par l'audit et la documentation. Aucun
-#: endpoint arbitraire ne peut être ajouté à l'exécution.
-ALLOWED_BASE_URLS: tuple[str, ...] = (
-    "https://api.minimax.io/v1",
-    OPENAI_BASE_URL,
-    ANTHROPIC_BASE_URL,
-    GEMINI_BASE_URL,
-)
+
+REGISTRY: dict[str, ProviderEntry] = _build_registry()
 
 SUPPORTED_PROVIDER_IDS: frozenset[str] = frozenset(REGISTRY)
 
@@ -164,9 +140,13 @@ def list_provider_specs() -> list[dict[str, Any]]:
                 "models": [
                     {
                         "model_id": model.model_id,
+                        "label": model.label,
                         "supports_tools": model.supports_tools,
                         "supports_streaming": model.supports_streaming,
                         "supports_structured_output": model.supports_structured_output,
+                        "supports_reasoning": model.supports_reasoning,
+                        "context": model.context,
+                        "max_output": model.max_output,
                         "pricing": model.pricing,
                     }
                     for model in entry.models
@@ -193,13 +173,11 @@ def model_entry(provider_id: str, model_id: str) -> ModelEntry | None:
     return None
 
 
-def create_adapter(
-    provider_id: str, model_id: str, api_key: str
-) -> ProviderAdapter:
+def create_adapter(provider_id: str, model_id: str, api_key: str) -> ProviderAdapter:
     """Fabrique un adapter configuré, OU lève une `ProviderError` propre.
 
-    La base URL provient exclusivement de la définition du registre : un
-    `provider_id` inconnu ou un modèle inconnu est refusé avant tout réseau.
+    La base URL provient exclusivement du catalogue : un `provider_id` inconnu
+    ou un modèle inconnu est refusé avant tout réseau.
     """
     entry = REGISTRY.get(provider_id)
     if entry is None:
@@ -220,11 +198,11 @@ def provider_pricing(
 ) -> dict[str, Any] | None:
     """Tarifs officiels/configurés du modèle choisi, ou None.
 
-    - MiniMax : les tarifs sont CONFIGURABLES dans les settings (DEV), sinon
-      les tarifs officiels du registre font foi ; 0.0 = non configuré -> None.
-    - OpenAI/Anthropic/Gemini : tarifs officiels du registre (ModelEntry).
+    - MiniMax : tarifs CONFIGURABLES dans les settings (DEV) ; 0.0 = non
+      configuré -> None.
+    - Autres : tarifs officiels du catalogue (models.dev).
     - Aucun tarif connu -> None : le coût reste `null` et n'empêche jamais une
-      analyse (philosophie CONCLAVE).
+      analyse.
     """
     if provider_id == "minimax":
         input_price = getattr(settings, "minimax_input_usd_per_million", 0.0)
