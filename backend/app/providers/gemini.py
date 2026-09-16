@@ -260,6 +260,7 @@ class GeminiAdapter(ProviderAdapter):
         max_output_tokens: int,
         temperature: float,
         tools: list[dict[str, Any]] | None,
+        tool_choice: Any | None = None,
     ) -> dict[str, Any]:
         system, contents = _translate_contents(messages)
         body: dict[str, Any] = {
@@ -274,6 +275,16 @@ class GeminiAdapter(ProviderAdapter):
         native_tools = _translate_tools(tools)
         if native_tools:
             body["tools"] = native_tools
+            if isinstance(tool_choice, dict):
+                # Appel d'outil FORCÉ : {"type":"function","function":{"name":…}}
+                name = tool_choice.get("function", {}).get("name")
+                if name:
+                    body["toolConfig"] = {
+                        "functionCallingConfig": {
+                            "mode": "ANY",
+                            "allowedFunctionNames": [name],
+                        }
+                    }
         return body
 
     async def complete(
@@ -284,7 +295,7 @@ class GeminiAdapter(ProviderAdapter):
         temperature: float,
         n: int = 1,
         tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,
+        tool_choice: Any | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> ProviderResult:
         body = self._body(
@@ -292,6 +303,7 @@ class GeminiAdapter(ProviderAdapter):
             max_output_tokens=max_output_tokens,
             temperature=temperature,
             tools=tools,
+            tool_choice=tool_choice,
         )
         try:
             response = await self._client.post(
@@ -354,13 +366,14 @@ class GeminiAdapter(ProviderAdapter):
         temperature: float,
         n: int = 1,
         tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,
+        tool_choice: Any | None = None,
     ) -> AsyncIterator[ProviderChunk]:
         body = self._body(
             messages=messages,
             max_output_tokens=max_output_tokens,
             temperature=temperature,
             tools=tools,
+            tool_choice=tool_choice,
         )
         try:
             async with self._client.stream(

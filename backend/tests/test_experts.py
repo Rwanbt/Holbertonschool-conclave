@@ -540,3 +540,63 @@ class TestProviderFailureCodes:
 
         assert result.status == "failed"
         assert result.error_code == "provider_rate_limited"
+
+    def test_provider_error_detail_is_persisted(self, tmp_path, monkeypatch):
+        """La cause réelle d'une panne provider est conservée (diagnostic)."""
+        settings = _settings(tmp_path)
+        client = self._auth_fail_client()
+        monkeypatch.setattr(experts, "build_provider", lambda **kwargs: client)
+        _run_analysis(tmp_path, settings, client)
+
+        async def read():
+            async with db.open_connection(settings.database_path) as conn:
+                return await db.list_events_after(conn, "a1")
+
+        events = asyncio.run(read())
+        failed = [
+            e for e in events
+            if e["event_type"] == "expert.failed" and '"role": "avocat"' in e["payload_json"]
+        ]
+        assert failed, "aucun expert.failed pour avocat"
+        payload = json.loads(failed[0]["payload_json"])
+        assert payload["error_code"] == "provider_auth_failed"
+        assert payload["error_detail"]
+
+
+class TestProviderLifecycle:
+    """Le provider partagé ne doit être fermé qu'APRÈS l'Arbitre (régression :
+    un `finally` le fermait après les experts, l'Arbitre échouait en
+    provider_unavailable)."""
+
+    def test_provider_stays_open_for_arbiter_and_is_closed_at_end(
+        self, tmp_path, monkeypatch
+    ):
+        class CloseTrackingClient(FakeClient):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.closed = False
+
+            async def close(self):
+                self.closed = True
+
+            async def complete(self, **kwargs):
+                assert not self.closed, "provider.complete appelé après close()"
+                return await super().complete(**kwargs)
+
+            async def stream_chat(self, **kwargs):
+                assert not self.closed, "provider.stream_chat appelé après close()"
+                async for chunk in super().stream_chat(**kwargs):
+                    yield chunk
+
+        scripts = scripted_experts(
+            comptable_extra=[final_completion(agent_output_json("comptable", score=70))]
+        )
+        scripts.update(scripted_arbiter())
+        client = CloseTrackingClient(scripts)
+        monkeypatch.setattr(experts, "build_provider", lambda **kwargs: client)
+
+        result = _run_analysis(tmp_path, _settings(tmp_path), client)
+
+        assert result.status == "completed"
+        assert result.verdict is not None
+        assert client.closed is True, "le provider doit être fermé en fin d'analyse"

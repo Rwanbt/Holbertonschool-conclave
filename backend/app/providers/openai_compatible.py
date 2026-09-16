@@ -54,6 +54,11 @@ def _normalize_usage(usage: Any) -> ProviderUsage | None:
 def _map_sdk_error(exc: Exception) -> ProviderError:
     """Traduit une exception du SDK `openai` en `ProviderError` normalisée."""
     status = getattr(exc, "status_code", None)
+
+    def _detail(prefix: str) -> str:
+        raw = str(exc).replace("\n", " ").strip()
+        return f"{prefix}: {raw[:160]}" if raw else prefix
+
     if isinstance(exc, AuthenticationError):
         return ProviderError(
             "provider_auth_failed",
@@ -100,10 +105,12 @@ def _map_sdk_error(exc: Exception) -> ProviderError:
         return ProviderError(
             "provider_unavailable",
             "Fournisseur injoignable (réseau ou DNS).",
+            detail=_detail("connection_error"),
         )
     return ProviderError(
         "provider_error",
         f"Erreur fournisseur inattendue : {exc.__class__.__name__}",
+        detail=_detail(exc.__class__.__name__),
     )
 
 
@@ -172,7 +179,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         temperature: float,
         n: int = 1,
         tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,
+        tool_choice: Any | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> ProviderResult:
         kwargs: dict[str, Any] = {
@@ -228,7 +235,7 @@ class OpenAICompatibleAdapter(ProviderAdapter):
         temperature: float,
         n: int = 1,
         tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,
+        tool_choice: Any | None = None,
     ) -> AsyncIterator[ProviderChunk]:
         kwargs: dict[str, Any] = {
             "model": self.model,

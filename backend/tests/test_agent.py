@@ -815,3 +815,53 @@ class TestAgentLoop:
         )
         assert result.stop_reason == "max_rounds_reached"
         assert events[-1][1]["outcome"] == "max_rounds"
+
+
+class TestForcedRequiredTool:
+    """Un modèle qui conclut sans appeler l'outil obligatoire doit être FORCÉ
+    à l'appeler (sinon il brûle ses tours -> max_rounds_reached)."""
+
+    def test_required_tool_is_forced_when_model_concludes(self, monkeypatch) -> None:
+        client = _FakeClient(
+            [
+                # Tour 1 : conclusion prématurée, AUCUN outil.
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion prématurée."))]),
+                # Tour 2 : doit être forcé -> le modèle appelle l'outil.
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                tool_calls=[
+                                    _FakeToolCall("call_1", "measure_current_document", "{}")
+                                ]
+                            )
+                        )
+                    ]
+                ),
+                # Tour 3 : conclusion valide.
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion valide."))]),
+            ]
+        )
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
+
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=4,
+                required_tools_before_final=frozenset({"measure_current_document"}),
+            )
+        )
+
+        assert result.executed_tools == ["measure_current_document"]
+        assert result.answer == "Conclusion valide."
+        # Le premier appel est en 'auto', le second FORCE l'outil manquant.
+        assert client.created_kwargs[0]["tool_choice"] == "auto"
+        assert client.created_kwargs[1]["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "measure_current_document"},
+        }

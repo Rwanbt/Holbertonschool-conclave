@@ -177,6 +177,11 @@ async def run_agent_loop(
     stop_reason: str | None = None
     protocol_error_detail: str | None = None
     finish_reason: str | None = None
+    # Outil obligatoire à FORCER au prochain tour quand le modèle conclut sans
+    # l'avoir demandé (ex. Comptable qui hallucine avoir déjà mesuré). Sans ce
+    # forçage, un modèle non conforme brûle tous ses tours et échoue en
+    # `max_rounds_reached` au lieu d'obtenir ses preuves.
+    forced_tool: str | None = None
 
     def record_usage(completion: Any) -> None:
         nonlocal any_usage, total_input, total_output, total_tokens
@@ -230,6 +235,14 @@ async def run_agent_loop(
             started = time.monotonic()
 
             async def _call(msgs: list[dict[str, Any]]):
+                tool_choice: Any = "auto" if tool_schemas else None
+                if tool_schemas and forced_tool is not None:
+                    # Forçage d'outil : garantit l'obtention des preuves
+                    # obligatoires auprès d'un modèle qui ne les demande pas.
+                    tool_choice = {
+                        "type": "function",
+                        "function": {"name": forced_tool},
+                    }
                 if stream_final_envelope:
                     return await stream_chat_completion(
                         provider,
@@ -238,7 +251,7 @@ async def run_agent_loop(
                         temperature=0.3,
                         n=1,
                         tools=tool_schemas,
-                        tool_choice="auto" if tool_schemas else None,
+                        tool_choice=tool_choice,
                         settings=settings,
                         live_sink=response_event_sink,
                         response_role=agent_role,
@@ -249,7 +262,7 @@ async def run_agent_loop(
                     temperature=0.3,
                     n=1,
                     tools=tool_schemas,
-                    tool_choice="auto" if tool_schemas else None,
+                    tool_choice=tool_choice,
                     response_format=None,
                 )
 
@@ -287,6 +300,10 @@ async def run_agent_loop(
             message = completion.choices[0].message
             tool_calls = message.tool_calls or []
             finish_reason = getattr(completion.choices[0], "finish_reason", None)
+            if tool_calls:
+                # Le modèle a répondu à la demande d'outil : on relâche le
+                # forçage (il sera réarmé au tour suivant si nécessaire).
+                forced_tool = None
 
             if stream_final_envelope:
                 if completion.protocol_error is not None:
@@ -358,6 +375,10 @@ async def run_agent_loop(
                         stop = True
                         stop_reason = "max_rounds_reached"
                         break
+                    # Force l'outil obligatoire au tour suivant : un modèle qui
+                    # « croit » avoir déjà mesuré sans appeler d'outil ne peut
+                    # plus contourner les preuves.
+                    forced_tool = missing_required[0]
                     messages.append(
                         {
                             "role": "assistant",
@@ -368,10 +389,11 @@ async def run_agent_loop(
                         {
                             "role": "user",
                             "content": (
-                                "Ta conclusion est prématurée. Demande maintenant, "
-                                "sans conclure, le prochain outil obligatoire manquant : "
-                                + ", ".join(missing_required)
-                                + ". Un seul outil par tour."
+                                "Ta conclusion est prématurée : tu n'as PAS encore "
+                                "appelé l'outil obligatoire "
+                                + missing_required[0]
+                                + ". Tu ne dois pas prétendre l'avoir fait. "
+                                "Appelle-le MAINTENANT (un seul outil, sans conclure)."
                             ),
                         }
                     )

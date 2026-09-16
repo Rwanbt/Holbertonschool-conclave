@@ -32,7 +32,7 @@ from typing import Any, Awaitable, Callable
 
 from pydantic import ValidationError
 
-from . import db, security, toolkit
+from . import db, redact, security, toolkit
 from .agent import AgentLoopResult, AgentSession, run_agent_loop
 from .config import Settings
 from .providers import ProviderError, build_provider, provider_pricing
@@ -677,7 +677,19 @@ async def run_expert(
         # Réseau coupé, clé invalide, 5xx provider : la cause est CONNUE et
         # doit être dite telle quelle (`provider_auth_failed`,
         # `provider_rate_limited`, `provider_timeout`…), jamais maquillée.
-        return await fail_run("error", exc.code or "provider_unavailable")
+        detail = (redact.redact_text(exc.detail or str(exc)) or "")[:120] or None
+        logger.warning(
+            "expert %s provider error [%s]: %s (analysis %s)",
+            role,
+            exc.code,
+            detail,
+            analysis_id,
+        )
+        return await fail_run(
+            "error",
+            exc.code or "provider_unavailable",
+            error_detail=detail,
+        )
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 - jamais avalé : tracé puis nommé
@@ -799,7 +811,10 @@ AgentOutput.model_json_schema(),
                         break
             except ProviderError as exc:
                 return await fail_run(
-                    "error", exc.code or "provider_unavailable", usage=run_usage
+                    "error",
+                    exc.code or "provider_unavailable",
+                    usage=run_usage,
+                    error_detail=(redact.redact_text(exc.detail or str(exc)) or "")[:120] or None,
                 )
             except Exception:  # noqa: BLE001 - tracé et nommé
                 logger.exception(
@@ -1048,7 +1063,16 @@ async def run_arbiter(
     except asyncio.TimeoutError:
         return await fail_arbiter("arbiter_timeout")
     except ProviderError as exc:
-        return await fail_arbiter(exc.code or "provider_unavailable")
+        detail = (redact.redact_text(exc.detail or str(exc)) or "")[:120] or None
+        logger.warning(
+            "arbiter provider error [%s]: %s (analysis %s)",
+            exc.code,
+            detail,
+            analysis_id,
+        )
+        return await fail_arbiter(
+            exc.code or "provider_unavailable", error_detail=detail
+        )
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 - jamais avalé : tracé puis nommé
@@ -1141,7 +1165,9 @@ async def run_arbiter(
                         break
             except ProviderError as exc:
                 return await fail_arbiter(
-                    exc.code or "provider_unavailable", arbiter_usage
+                    exc.code or "provider_unavailable",
+                    arbiter_usage,
+                    error_detail=(redact.redact_text(exc.detail or str(exc)) or "")[:120] or None,
                 )
             except Exception:  # noqa: BLE001 - tracé et nommé
                 logger.exception(
@@ -1281,6 +1307,7 @@ async def run_analysis(
                     "error_code": "analysis_timeout",
                 },
             )
+        await provider.close()
         return AnalysisResult(
             analysis_id=analysis_id,
             status="failed",
@@ -1289,8 +1316,6 @@ async def run_analysis(
             verdict=None,
             usage=_empty_usage(),
         )
-    finally:
-        await provider.close()
 
     escaped_errors: list[str] = []
     for role, outcome in zip(EXPERT_ROLES, outcomes):
@@ -1400,6 +1425,7 @@ async def run_analysis(
             },
         )
 
+    await provider.close()
     return AnalysisResult(
         analysis_id=analysis_id,
         status=status,

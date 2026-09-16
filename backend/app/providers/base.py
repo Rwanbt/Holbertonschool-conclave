@@ -103,7 +103,7 @@ class ProviderAdapter(ABC):
         temperature: float,
         n: int = 1,
         tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,
+        tool_choice: Any | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> ProviderResult:
         """Appel non streamé normalisé."""
@@ -117,7 +117,7 @@ class ProviderAdapter(ABC):
         temperature: float,
         n: int = 1,
         tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,
+        tool_choice: Any | None = None,
     ) -> AsyncIterator[ProviderChunk]:
         """Appel streamé : itère des deltas normalisés (ProviderChunk)."""
 

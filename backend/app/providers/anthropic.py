@@ -247,7 +247,7 @@ class AnthropicAdapter(ProviderAdapter):
         max_output_tokens: int,
         temperature: float,
         tools: list[dict[str, Any]] | None,
-        tool_choice: str | None,
+        tool_choice: Any | None,
         response_format: dict[str, Any] | None,
         stream: bool,
     ) -> dict[str, Any]:
@@ -266,6 +266,13 @@ class AnthropicAdapter(ProviderAdapter):
             body["tools"] = native_tools
             if tool_choice == "none":
                 body["tool_choice"] = {"type": "none"}
+            elif isinstance(tool_choice, dict):
+                # Appel d'outil FORCÉ : {"type":"function","function":{"name":…}}
+                name = tool_choice.get("function", {}).get("name")
+                if name:
+                    body["tool_choice"] = {"type": "tool", "name": name}
+                else:
+                    body["tool_choice"] = {"type": "auto"}
             else:
                 body["tool_choice"] = {"type": "auto"}
         if response_format is not None:
@@ -282,7 +289,7 @@ class AnthropicAdapter(ProviderAdapter):
         temperature: float,
         n: int = 1,
         tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,
+        tool_choice: Any | None = None,
         response_format: dict[str, Any] | None = None,
     ) -> ProviderResult:
         body = self._body(
@@ -319,7 +326,7 @@ class AnthropicAdapter(ProviderAdapter):
         temperature: float,
         n: int = 1,
         tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | None = None,
+        tool_choice: Any | None = None,
     ) -> AsyncIterator[ProviderChunk]:
         body = self._body(
             messages=messages,

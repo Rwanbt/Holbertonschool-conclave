@@ -593,3 +593,70 @@ class TestMiniMaxAdapter:
             label="OpenAI",
         )
         assert adapter_openai._extra_kwargs() == {}
+
+class TestMiniMaxChannels:
+    """Marqueurs de canal MiniMax retirés du contenu (stream et non-stream)."""
+
+    def test_strip_markers(self) -> None:
+        from backend.app.providers.minimax import _strip_markers
+
+        raw = "Bonjour.]<]minimax[>[La suite.<]minimax[>Fin"
+        assert _strip_markers(raw) == "Bonjour.La suite.Fin"
+
+    def test_completion_normalization_removes_markers(self) -> None:
+        from backend.app.providers.minimax import MiniMaxAdapter
+
+        adapter = MiniMaxAdapter(api_key="sk-test")
+        completion = _FakeCompletion(
+            [_FakeChoice(_FakeMessage(content="Réponse.]<]minimax[>[Suite."))]
+        )
+        result = adapter._normalize_completion(completion)
+        assert result.content == "Réponse.Suite."
+        assert "minimax" not in (result.content or "")
+
+    def test_chunk_normalization_removes_markers(self) -> None:
+        from backend.app.providers.minimax import MiniMaxAdapter
+
+        adapter = MiniMaxAdapter(api_key="sk-test")
+        chunk = _FakeStreamChunk(delta=_FakeDelta(content="A]<]minimax[>[B"))
+        normalized = adapter._normalize_chunk(chunk)
+        assert normalized.content_delta == "AB"
+
+
+class TestForcedToolChoiceTranslation:
+    """Le forçage d'outil (dict) est traduit par chaque adapter."""
+
+    def test_anthropic_forced_tool(self) -> None:
+        body = AnthropicAdapter(api_key="sk-ant-x", model="claude-3-5-haiku-latest")._body(
+            messages=[{"role": "user", "content": "x"}],
+            max_output_tokens=100,
+            temperature=0.0,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "m", "description": "d", "parameters": {"type": "object"}},
+                }
+            ],
+            tool_choice={"type": "function", "function": {"name": "m"}},
+            response_format=None,
+            stream=False,
+        )
+        assert body["tool_choice"] == {"type": "tool", "name": "m"}
+
+    def test_gemini_forced_tool(self) -> None:
+        body = GeminiAdapter(
+            api_key="AIza-x", model="gemini-2.0-flash", base_url="https://mock.local/v1beta"
+        )._body(
+            messages=[{"role": "user", "content": "x"}],
+            max_output_tokens=100,
+            temperature=0.0,
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "m", "description": "d", "parameters": {"type": "object"}},
+                }
+            ],
+            tool_choice={"type": "function", "function": {"name": "m"}},
+        )
+        assert body["toolConfig"]["functionCallingConfig"]["mode"] == "ANY"
+        assert body["toolConfig"]["functionCallingConfig"]["allowedFunctionNames"] == ["m"]
