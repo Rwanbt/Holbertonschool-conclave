@@ -10,8 +10,13 @@ propriétaire en production, isolation multi-utilisateur et déploiement Netlify
 
 - **Front** : React 18 + TypeScript + Vite (`frontend/`), déployable sur Netlify.
 - **Back** : FastAPI + Python + Pydantic, SQLite (`backend/`), ASGI/Docker.
-- **Fournisseurs** : MiniMax, OpenAI, Anthropic, Google Gemini — chacun avec sa
-  propre clé API BYOK (voir [`docs/PROVIDERS.md`](docs/PROVIDERS.md)).
+- **Fournisseurs** : catalogue de **24 providers / ~350 modèles** (généré depuis
+  [models.dev](https://models.dev), la source d'opencode) — OpenAI, Anthropic,
+  Google Gemini, MiniMax, DeepSeek, Groq, Mistral, xAI, Together, Cerebras,
+  DeepInfra, Fireworks, OpenRouter, Novita, Nebius, SiliconFlow, Hugging Face,
+  NVIDIA, Baseten, Z.AI/Zhipu, Alibaba (Qwen), Moonshot, Xiaomi… Connectables
+  par **clé API BYOK**, plus **OAuth Google Gemini** officiel. Voir
+  [`docs/PROVIDERS.md`](docs/PROVIDERS.md).
 
 ## Démarrage local
 
