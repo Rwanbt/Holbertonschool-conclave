@@ -1,3 +1,9 @@
+<div align="center">
+
+![CONCLAVE](docs/assets/conclave_banner.png)
+
+</div>
+
 # CONCLAVE — trois lectures contradictoires, un verdict exploitable
 
 CONCLAVE confronte trois experts **antagonistes** (**Avocat**, **Procureur**,
