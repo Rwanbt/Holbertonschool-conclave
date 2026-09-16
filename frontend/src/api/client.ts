@@ -244,6 +244,7 @@ export async function fetchAnalysisSnapshot(
   try {
     response = await fetch(`${ANALYSES_ENDPOINT}/${analysisId}`, {
       credentials: CREDENTIALS,
+      headers: sessionHeaders(),
     })
   } catch {
     throw {

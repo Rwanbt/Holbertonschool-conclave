@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { establishSession, fetchProviderCatalog } from './client'
+import { establishSession, fetchAnalysisSnapshot, fetchProviderCatalog } from './client'
 import { writeStoredSessionToken } from '../storage'
 
 const SESSION_TOKEN_KEY = 'conclave.sessionToken.v1'
@@ -77,5 +77,33 @@ describe('session par en-tête X-Session-Token (cross-site)', () => {
     expect((init as RequestInit).headers).toMatchObject({
       'X-Session-Token': 'tok-existing',
     })
+  })
+
+  it('fetchAnalysisSnapshot envoie le token (régression 404 post-création)', async () => {
+    // Régression : ce fetch était le SEUL sans en-tête -> 404 juste après la
+    // création, retour à l'accueil. Il DOIT transporter la session.
+    writeStoredSessionToken('tok-snapshot')
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        void input
+        void init
+        return {
+          ok: false,
+          status: 404,
+          json: async () => ({ detail: 'analysis not found' }),
+        } as Response
+      },
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchAnalysisSnapshot('a1')).rejects.toMatchObject({
+      kind: 'http',
+      status: 404,
+    })
+    const call = fetchMock.mock.calls.find(([u]) => String(u).endsWith('/api/analyses/a1'))
+    expect(call).toBeDefined()
+    const init = call![1] as RequestInit
+    expect(init.headers).toMatchObject({ 'X-Session-Token': 'tok-snapshot' })
+    expect(init.credentials).toBe('include')
   })
 })
