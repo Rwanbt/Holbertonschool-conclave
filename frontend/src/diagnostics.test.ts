@@ -22,6 +22,8 @@ function snapshot(overrides: Partial<AnalysisSnapshot> = {}): AnalysisSnapshot {
     started_at: 't',
     completed_at: 't',
     error_code: null,
+    provider_id: 'minimax',
+    model_id: 'MiniMax-M3',
     avocat: { role: 'avocat', status: 'error', output: null, error_code: null },
     procureur: { role: 'procureur', status: 'error', output: null, error_code: null },
     comptable: { role: 'comptable', status: 'error', output: null, error_code: null },
@@ -55,8 +57,8 @@ function snapshot(overrides: Partial<AnalysisSnapshot> = {}): AnalysisSnapshot {
 describe('explainErrorCode', () => {
   it('traduit une panne fournisseur en explication actionnable', () => {
     const explanation = explainErrorCode('provider_unavailable')
-    expect(explanation.what).toContain('MiniMax')
-    expect(explanation.action).toContain('MINIMAX_API_KEY')
+    expect(explanation.what).toContain('fournisseur IA')
+    expect(explanation.action).toContain('Fournisseur IA')
   })
 
   it('rend un code inconnu tel quel plutôt que de prétendre l’avoir compris', () => {
@@ -186,5 +188,23 @@ describe('resolveTheme', () => {
   it('un choix explicite l’emporte sur la préférence système', () => {
     expect(resolveTheme('light', true)).toBe('light')
     expect(resolveTheme('dark', false)).toBe('dark')
+  })
+})
+
+describe('explainErrorCode — erreurs provider normalisées', () => {
+  it('explique une clé refusée de façon actionnable', () => {
+    const explanation = explainErrorCode('provider_auth_failed')
+    expect(explanation.what.toLowerCase()).toContain('clé')
+    expect(explanation.action).toContain('Fournisseur IA')
+  })
+
+  it('explique un quota atteint', () => {
+    const explanation = explainErrorCode('provider_rate_limited')
+    expect(explanation.what.toLowerCase()).toContain('quota')
+    expect(explanation.action).not.toBeNull()
+  })
+
+  it('explique un modèle indisponible', () => {
+    expect(explainErrorCode('model_not_available').action).toContain('modèle')
   })
 })

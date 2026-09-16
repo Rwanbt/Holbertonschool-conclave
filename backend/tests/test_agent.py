@@ -28,7 +28,7 @@ def _settings(**overrides) -> Settings:
 
 def _run(monkeypatch, responses, settings=None) -> agent.AgentResponse:
     settings = settings or _settings()
-    monkeypatch.setattr(agent, "build_client", lambda s: _FakeClient(responses))
+    monkeypatch.setattr(agent, "build_provider", lambda **kwargs: _FakeClient(responses))
     return asyncio.run(agent.run_agent("Analyse le document.", _DOC, settings))
 
 
@@ -71,32 +71,56 @@ class _FakeCompletion:
         self.usage = usage
 
 
-class _FakeCompletions:
+class _FakeClient:
+    """Provider minimal inline : `complete` scripté, interface ProviderAdapter."""
+
     def __init__(self, responses):
         self._responses = list(responses)
         self.created_kwargs: list[dict] = []
 
-    async def create(self, **kwargs):
+    async def close(self) -> None:
+        return None
+
+    async def complete(self, **kwargs):
         self.created_kwargs.append(kwargs)
         if not self._responses:
             raise AssertionError("agent loop called the provider too many times")
-        return self._responses.pop(0)
+        response = self._responses.pop(0)
+        from backend.app.providers.types import (
+            ProviderChoice,
+            ProviderMessage,
+            ProviderResult,
+            ProviderToolCall,
+            ProviderUsage,
+        )
 
-
-class _FakeChat:
-    def __init__(self, responses):
-        self.completions = _FakeCompletions(responses)
-
-
-class _FakeClient:
-    def __init__(self, responses):
-        self.chat = _FakeChat(responses)
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc):
-        return False
+        choices = []
+        for choice in response.choices:
+            message = choice.message
+            tool_calls = [
+                ProviderToolCall(
+                    id=call.id,
+                    name=call.function.name,
+                    arguments=call.function.arguments,
+                )
+                for call in (message.tool_calls or [])
+            ]
+            choices.append(
+                ProviderChoice(
+                    message=ProviderMessage(
+                        content=message.content, tool_calls=tool_calls or None
+                    ),
+                    finish_reason=None,
+                )
+            )
+        usage = None
+        if response.usage is not None:
+            usage = ProviderUsage(
+                input_tokens=response.usage.prompt_tokens,
+                output_tokens=response.usage.completion_tokens,
+                total_tokens=response.usage.total_tokens,
+            )
+        return ProviderResult(choices=choices, usage=usage)
 
 
 class TestRegistry:
@@ -132,7 +156,7 @@ class TestRegistry:
         client = _FakeClient(
             [_FakeCompletion([_FakeChoice(_FakeMessage(content="Je ne peux pas vérifier."))])]
         )
-        monkeypatch.setattr(agent, "build_client", lambda s: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
 
         result = asyncio.run(
             agent.run_agent_loop(
@@ -147,8 +171,8 @@ class TestRegistry:
             )
         )
         assert result.answer == "Je ne peux pas vérifier."
-        assert "tools" not in client.chat.completions.created_kwargs[0]
-        assert "tool_choice" not in client.chat.completions.created_kwargs[0]
+        assert not client.created_kwargs[0].get("tools")
+        assert not client.created_kwargs[0].get("tool_choice")
 
 
 class TestAgentLoop:
@@ -174,7 +198,7 @@ class TestAgentLoop:
                 _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion valide."))]),
             ]
         )
-        monkeypatch.setattr(agent, "build_client", lambda settings: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
         events: list[tuple[str, dict]] = []
 
         async def round_sink(kind: str, fields: dict) -> None:
@@ -218,7 +242,7 @@ class TestAgentLoop:
                 _FakeCompletion([_FakeChoice(_FakeMessage(content="Refus."))]),
             ]
         )
-        monkeypatch.setattr(agent, "build_client", lambda s: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
         result = asyncio.run(
             agent.run_agent_loop(
                 [
@@ -729,7 +753,7 @@ class TestAgentLoop:
 
     def test_provider_error_closes_the_visible_round(self, monkeypatch) -> None:
         client = _FakeClient([_FakeCompletion([], usage=None)])
-        monkeypatch.setattr(agent, "build_client", lambda _settings: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
         events: list[tuple[str, dict]] = []
 
         async def round_sink(kind: str, fields: dict) -> None:
@@ -771,7 +795,7 @@ class TestAgentLoop:
                 )
             ]
         )
-        monkeypatch.setattr(agent, "build_client", lambda _settings: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
         events: list[tuple[str, dict]] = []
 
         async def round_sink(kind: str, fields: dict) -> None:
@@ -791,3 +815,53 @@ class TestAgentLoop:
         )
         assert result.stop_reason == "max_rounds_reached"
         assert events[-1][1]["outcome"] == "max_rounds"
+
+
+class TestForcedRequiredTool:
+    """Un modèle qui conclut sans appeler l'outil obligatoire doit être FORCÉ
+    à l'appeler (sinon il brûle ses tours -> max_rounds_reached)."""
+
+    def test_required_tool_is_forced_when_model_concludes(self, monkeypatch) -> None:
+        client = _FakeClient(
+            [
+                # Tour 1 : conclusion prématurée, AUCUN outil.
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion prématurée."))]),
+                # Tour 2 : doit être forcé -> le modèle appelle l'outil.
+                _FakeCompletion(
+                    [
+                        _FakeChoice(
+                            _FakeMessage(
+                                tool_calls=[
+                                    _FakeToolCall("call_1", "measure_current_document", "{}")
+                                ]
+                            )
+                        )
+                    ]
+                ),
+                # Tour 3 : conclusion valide.
+                _FakeCompletion([_FakeChoice(_FakeMessage(content="Conclusion valide."))]),
+            ]
+        )
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
+
+        result = asyncio.run(
+            agent.run_agent_loop(
+                [
+                    {"role": "system", "content": agent.SYSTEM_PROMPT},
+                    {"role": "user", "content": "Analyse."},
+                ],
+                agent.AgentSession(document=_DOC),
+                _settings(),
+                max_rounds=4,
+                required_tools_before_final=frozenset({"measure_current_document"}),
+            )
+        )
+
+        assert result.executed_tools == ["measure_current_document"]
+        assert result.answer == "Conclusion valide."
+        # Le premier appel est en 'auto', le second FORCE l'outil manquant.
+        assert client.created_kwargs[0]["tool_choice"] == "auto"
+        assert client.created_kwargs[1]["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "measure_current_document"},
+        }

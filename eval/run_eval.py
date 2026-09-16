@@ -52,6 +52,7 @@ class CaseResult:
 def _settings(tmp: Path, **overrides) -> Settings:
     base = {
         "minimax_api_key": "sk-eval-not-a-real-key",
+        "allow_server_provider_credentials": True,
         "database_path": str(tmp / "eval.db"),
         "minimax_input_usd_per_million": 0.30,
         "minimax_output_usd_per_million": 1.20,
@@ -69,32 +70,29 @@ def _healthy_client() -> FakeClient:
     return FakeClient(scripts)
 
 
-class _DeadCompletions:
-    async def create(self, **_kwargs):
+class DeadClient:
+    """Provider injoignable : réseau coupé ou clé invalide."""
+
+    def __init__(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        return None
+
+    async def complete(self, **_kwargs):
         raise ConnectionError("Network is unreachable")
 
-
-class _DeadChat:
-    def __init__(self) -> None:
-        self.completions = _DeadCompletions()
-
-
-class DeadClient:
-    """MiniMax injoignable : réseau coupé ou clé invalide."""
-
-    def __init__(self) -> None:
-        self.chat = _DeadChat()
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_exc):
-        return False
+    async def stream_chat(self, **_kwargs):
+        raise ConnectionError("Network is unreachable")
+        yield  # pragma: no cover - never reached
 
 
 def _install(client) -> None:
-    agent.build_client = lambda _s: client
-    experts.build_client = lambda _s: client
+    from backend.app import main as main_module
+
+    agent.build_provider = lambda **kwargs: client
+    experts.build_provider = lambda **kwargs: client
+    main_module.build_provider = lambda **kwargs: client
 
 
 def _wait_terminal(tc: TestClient, analysis_id: str) -> dict:

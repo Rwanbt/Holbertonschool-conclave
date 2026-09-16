@@ -27,6 +27,7 @@ from .conftest import FakeClient, scripted_arbiter, scripted_experts
 def _settings(tmp_path, **overrides) -> Settings:
     base = {
         "minimax_api_key": "sk-test-not-a-real-key",
+        "allow_server_provider_credentials": True,
         "database_path": str(tmp_path / "sec.db"),
         "minimax_input_usd_per_million": 0.30,
         "minimax_output_usd_per_million": 1.20,
@@ -45,27 +46,21 @@ def _factory(path: str):
     return get_connection
 
 
-class _DeadCompletions:
-    async def create(self, **_kwargs):
+class DeadClient:
+    """Réseau coupé, ou clé invalide : chaque appel provider échoue."""
+
+    def __init__(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        return None
+
+    async def complete(self, **_kwargs):
         raise ConnectionError("Network is unreachable")
 
-
-class _DeadChat:
-    def __init__(self) -> None:
-        self.completions = _DeadCompletions()
-
-
-class DeadClient:
-    """Réseau coupé, ou clé invalide : chaque appel MiniMax échoue."""
-
-    def __init__(self) -> None:
-        self.chat = _DeadChat()
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *_exc):
-        return False
+    async def stream_chat(self, **_kwargs):
+        raise ConnectionError("Network is unreachable")
+        yield  # pragma: no cover - never reached
 
 
 class TestProviderOutageIsNeverDisguised:
@@ -76,8 +71,8 @@ class TestProviderOutageIsNeverDisguised:
     ) -> None:
         settings = _settings(tmp_path)
         client = DeadClient()
-        monkeypatch.setattr(agent, "build_client", lambda _s: client)
-        monkeypatch.setattr(experts, "build_client", lambda _s: client)
+        monkeypatch.setattr(agent, "build_provider", lambda **kwargs: client)
+        monkeypatch.setattr(experts, "build_provider", lambda **kwargs: client)
 
         async def go():
             await db.initialize(settings.database_path, "")

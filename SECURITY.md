@@ -1,32 +1,39 @@
 # Sécurité — CONCLAVE
 
-## 1. Aucune clé côté front
+## 1. BYOK — aucune clé propriétaire, aucune clé persistée
 
-La clé MiniMax vit dans `.env` à la racine (ignoré par git) ou dans les
-variables d'environnement du serveur. Elle est lue par `backend/app/config.py`
-et n'existe que dans le processus backend.
+En production, le backend ne possède **aucune clé LLM** : chaque utilisateur
+fournit la sienne (BYOK). La clé :
 
-Le frontend ne connaît **qu'une** variable, `VITE_API_BASE_URL`, qui n'est pas
-un secret : c'est l'URL du backend. Tout ce que Vite injecte dans le bundle est
-public par construction — donc rien de sensible n'y est mis.
+- vit **uniquement en mémoire** dans le navigateur, puis dans l'exécution
+  backend concernée ;
+- est transmise au `POST /api/analyses/{id}/start` (HTTPS) et validée sur
+  place (fail-fast 400 sans transition si absente/invalide) ;
+- n'est **jamais** écrite dans : le bundle frontend, `.env`, `VITE_*`,
+  SQLite, localStorage/IndexedDB, l'URL, les événements SSE, les traces, les
+  logs, les exceptions ou une réponse API ;
+- est libérée à la fin de la tâche (`provider.close()`). Un rechargement la
+  fait disparaître volontairement de l'interface.
 
-Vérifiable :
+Les clés serveur éventuelles (`MINIMAX_API_KEY`, `OPENAI_API_KEY`, …) sont
+**DEV/SMOKE uniquement** et inactives par défaut :
+`ALLOW_SERVER_PROVIDER_CREDENTIALS=false`. Il n'existe **aucun** fallback
+silencieux vers la clé du propriétaire lorsque la clé utilisateur manque ou
+échoue.
+
+Le frontend ne connaît qu'une variable de build, `VITE_API_BASE_URL` (l'URL du
+backend), qui n'est pas un secret. Vérifiable :
 
 ```bash
 cd frontend && npm run build && cd ..
 ./scripts/check-no-secrets.sh          # sortie 0 = propre, 1 = secret détecté
 ```
 
-Le script cherche des **valeurs** de secret (motif `sk-…`, valeur de
-`$MINIMAX_API_KEY`, clé du `.env` local), pas des noms de variable : le nom
-`MINIMAX_API_KEY` apparaît légitimement dans un message d'aide affiché à
-l'utilisateur (« vérifiez MINIMAX_API_KEY côté serveur »). Un `grep` naïf sur
-ce nom produit un faux positif — c'est d'ailleurs ce qui s'est produit lors de
-la mise au point de ce contrôle, et pourquoi il est scripté plutôt que laissé à
-une commande improvisée.
-
-Le harnais d'évaluation vérifie aussi qu'aucune clé n'apparaît dans les
-événements SSE persistés (cas 4).
+Le script cherche des **valeurs** de secret (motifs `sk-…`, `sk-ant-…`,
+`AIza…`, valeurs du `.env`, base SQLite), pas des noms de variable. Les tests
+d'isolation (`backend/tests/test_isolation.py`) vérifient qu'un credential
+connu n'apparaît ni dans le snapshot, ni dans l'historique, ni en base, ni dans
+les messages envoyés au modèle.
 
 ## 2. « Que se passe-t-il si l'utilisateur écrit *ignore tes instructions précédentes* ? »
 
@@ -119,3 +126,50 @@ résultat ? », avec l'action corrective correspondante.
 make eval        # 5 cas hostiles, score chiffré, sans clé MiniMax
 make test        # suites backend + frontend
 ```
+
+## 6. Isolation multi-utilisateur
+
+Chaque visiteur reçoit une session anonyme **signée (HMAC)** dans un cookie
+HttpOnly (`conclave_session`). Chaque analyse stocke son `owner_session` :
+
+- les routes snapshot, historique, streaming et `/start` vérifient l'égalité
+  session ↔ propriétaire et répondent **404** sinon (aucune fuite d'existence) ;
+- les préférences d'outils sont **par session** (`session_tool_states`) : un
+  utilisateur ne modifie jamais les réglages d'un autre ;
+- plafonds globaux (`MAX_CONCURRENT_ANALYSES`) et par session
+  (`MAX_ANALYSES_PER_SESSION`) → 429 explicite ;
+- analyses `queued` jamais démarrées : expirées après `QUEUED_ANALYSIS_TTL_SECONDS`.
+
+`SESSION_COOKIE_SECRET` doit être stable en production ; s'il est vide, une clé
+aléatoire par processus est utilisée et les sessions sont invalidées au
+redémarrage (documenté, acceptable).
+
+## 7. Redaction centralisée
+
+`backend/app/redact.py` masque toute valeur connue (clé BYOK enregistrée au
+runtime) et les motifs de clés (sk-…, sk-ant-…, AIza…, Authorization, …) dans
+toute chaîne destinée à un log, un événement SSE, la base ou une réponse HTTP.
+Les tests de non-fuite vérifient ce comportement.
+
+## 8. Anti-SSRF et CORS
+
+- **Anti-SSRF** : la `base_url` d'un provider n'est **jamais** saisie par
+  l'utilisateur ; elle provient exclusivement du registre contrôlé
+  (`backend/app/providers/registry.py`, allowlist). Un `provider_id`/modèle
+  inconnu est refusé avant tout réseau.
+- **CORS** : origines explicites (`FRONTEND_ORIGINS`), credentials autorisés,
+  en-têtes `Content-Type`/`Authorization` uniquement. Jamais `*`.
+
+## 9. Confidentialité fournisseur
+
+Le document soumis est transmis au fournisseur **choisi par l'utilisateur** via
+son propre compte API. L'interface l'affiche avant lancement. CONCLAVE ne
+garantit pas les conditions de confidentialité du fournisseur et ne prétend
+jamais le contraire. Le document n'est jamais journalisé par le backend.
+
+## 10. Pourquoi pas ChatGPT OAuth pour l'inférence ?
+
+« Sign in with ChatGPT » est un fournisseur d'identité, pas un moyen de
+financer les inférences OpenAI API. CONCLAVE ne récupère jamais de cookie,
+token interne, endpoint privé ou mécanisme reverse-engineered ChatGPT. Les
+inférences OpenAI utilisent une clé API BYOK.
