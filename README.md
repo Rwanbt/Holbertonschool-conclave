@@ -1,6 +1,6 @@
 <div align="center">
 
-![CONCLAVE](docs/assets/conclave_banner.png)
+![CONCLAVE](docs/assets/Conclave_banner.png)
 
 </div>
 
